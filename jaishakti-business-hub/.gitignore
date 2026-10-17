@@ -1,0 +1,76 @@
+# Node dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+
+# SQLite databases & journals
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.db
+*.db-wal
+*.db-shm
+
+# Persistent storage directories (runtime data)
+data/*
+!data/.gitkeep
+jaishakti-business-hub/data/*
+!jaishakti-business-hub/data/.gitkeep
+jaishakti-business-hub-windows/data/*
+!jaishakti-business-hub-windows/data/.gitkeep
+
+# Logs
+logs/*
+!logs/.gitkeep
+jaishakti-business-hub/logs/*
+!jaishakti-business-hub/logs/.gitkeep
+jaishakti-business-hub-windows/logs/*
+!jaishakti-business-hub-windows/logs/.gitkeep
+*.log
+
+# Backups
+backups/*
+!backups/.gitkeep
+jaishakti-business-hub/backups/*
+!jaishakti-business-hub/backups/.gitkeep
+jaishakti-business-hub-windows/backups/*
+!jaishakti-business-hub-windows/backups/.gitkeep
+
+# Uploads
+uploads/*
+!uploads/.gitkeep
+jaishakti-business-hub/uploads/*
+!jaishakti-business-hub/uploads/.gitkeep
+jaishakti-business-hub-windows/uploads/*
+!jaishakti-business-hub-windows/uploads/.gitkeep
+
+# macOS metadata & system files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
