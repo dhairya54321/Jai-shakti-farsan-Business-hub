@@ -5,6 +5,8 @@ import { runMigrations } from '../server/db/migrate.js';
 import { seedDatabase } from '../server/db/seed.js';
 import ExpenseService, { parseAndValidateAmount } from '../server/services/expenseService.js';
 import VoiceParserService from '../server/services/voiceParserService.js';
+import { parseInvoiceText } from '../server/services/ocrService.js';
+import { getDatabase } from '../server/db/index.js';
 
 describe('A. Expense Creation and Validation Tests', () => {
   let db;
@@ -13,14 +15,10 @@ describe('A. Expense Creation and Validation Tests', () => {
   const staffUser = { id: 'usr_staff_001', username: 'staff', role: 'staff', business_id: testBizId };
 
   before(() => {
-    // In-memory or isolated test DB
-    db = new Database(':memory:');
-    runMigrations(db);
-    seedDatabase(db);
+    db = getDatabase();
   });
 
   after(() => {
-    if (db) db.close();
   });
 
   test('Valid monetary amount parsing (exact 2 decimal places)', () => {
@@ -108,4 +106,140 @@ describe('A. Expense Creation and Validation Tests', () => {
       });
     }, /Expense category is required/);
   });
+
+  test('Expense receipt OCR decodes items, quantities, and attaches stored receipt file', () => {
+    const rawBill = `
+      TAX INVOICE
+      Satguru Krupa Traders
+      GSTIN: 24AAACS1234F1Z5
+      Invoice No: SKT-9921
+      Date: 15/10/2026
+      Item: Kopra Sali 10.00 KG | 245.00 | 2450.00
+      Total Amount: 2450.00
+    `;
+
+    const { extracted } = parseInvoiceText(rawBill);
+    assert.equal(extracted.vendorName, 'Satguru Krupa Traders');
+    assert.equal(extracted.totalAmount, 2450);
+    assert.equal(extracted.invoiceDate, '2026-10-15');
+    assert.ok(extracted.items.length > 0);
+    assert.ok(extracted.notes.includes('Kopra Sali'));
+    assert.ok(extracted.notes.includes('10.00 KG'));
+
+    const rawCat = db.prepare("SELECT id FROM expense_categories WHERE code = 'raw_materials' AND business_id = ?").get(testBizId);
+
+    const testStorageKey = 'scanned_receipt_test_' + Date.now() + '.jpg';
+
+    // Create expense linking the scanned stored file
+    const expense = ExpenseService.createExpense(ownerUser, {
+      category_id: rawCat.id,
+      amount: extracted.totalAmount,
+      payment_method: 'cash',
+      payment_status: 'paid',
+      transaction_date: extracted.invoiceDate,
+      invoice_number: extracted.invoiceNumber + '-' + Date.now(),
+      notes: extracted.notes,
+      stored_filename: testStorageKey,
+      stored_originalname: 'kamya_bill.jpg',
+      stored_mimetype: 'image/jpeg',
+      stored_size: 102400
+    });
+
+    assert.equal(expense.amount, 2450);
+    assert.ok(expense.invoice_number.startsWith('SKT-9921'));
+    assert.ok(expense.notes.includes('Kopra Sali'));
+
+    // Verify attachment record was created
+    const realDb = getDatabase();
+    const att = realDb.prepare('SELECT * FROM expense_attachments WHERE expense_id = ?').get(expense.id);
+    assert.ok(att);
+    assert.equal(att.storage_key, testStorageKey);
+    assert.equal(att.original_filename, 'kamya_bill.jpg');
+  });
+
+  test('Strictly reject duplicate expense with same vendor and invoice number', () => {
+    const rawCat = db.prepare("SELECT id FROM expense_categories WHERE code = 'raw_materials' AND business_id = ?").get(testBizId);
+    const vendor = db.prepare('SELECT id FROM vendors WHERE business_id = ? LIMIT 1').get(testBizId);
+    const testInv = 'INV-DUP-' + Date.now();
+
+    // 1. Create first expense
+    const firstExp = ExpenseService.createExpense(ownerUser, {
+      category_id: rawCat.id,
+      vendor_id: vendor.id,
+      amount: 1500,
+      payment_method: 'cash',
+      payment_status: 'paid',
+      transaction_date: '2026-10-18',
+      invoice_number: testInv
+    });
+    assert.ok(firstExp);
+
+    // 2. Check checkDuplicateExpense detects it
+    const dupeCheck = ExpenseService.checkDuplicateExpense(testBizId, {
+      vendor_id: vendor.id,
+      invoice_number: testInv
+    });
+    assert.equal(dupeCheck.isDuplicate, true);
+    assert.equal(dupeCheck.matchType, 'invoice_number');
+    assert.equal(dupeCheck.duplicate.id, firstExp.id);
+
+    // 3. Attempting to create duplicate expense throws error with DUPLICATE_EXPENSE code
+    assert.throws(() => {
+      ExpenseService.createExpense(ownerUser, {
+        category_id: rawCat.id,
+        vendor_id: vendor.id,
+        amount: 1500,
+        payment_method: 'cash',
+        payment_status: 'paid',
+        transaction_date: '2026-10-18',
+        invoice_number: testInv
+      });
+    }, (err) => {
+      assert.equal(err.code, 'DUPLICATE_EXPENSE');
+      assert.ok(err.message.includes('already been recorded'));
+      return true;
+    });
+  });
+
+  test('Delete unwanted transaction removes expense, payments, attachments and logs audit', () => {
+    const rawCat = db.prepare("SELECT id FROM expense_categories WHERE code = 'raw_materials' AND business_id = ?").get(testBizId);
+
+    // 1. Create an unwanted expense with payment
+    const unwanted = ExpenseService.createExpense(ownerUser, {
+      category_id: rawCat.id,
+      amount: 850.00,
+      payment_method: 'cash',
+      payment_status: 'paid',
+      description: 'Mistaken duplicate entry to be deleted'
+    });
+    assert.ok(unwanted);
+
+    // 2. Staff user cannot delete
+    assert.throws(() => {
+      ExpenseService.deleteExpense(staffUser, unwanted.id, 'Staff trying to delete');
+    }, /Only owners and managers can delete transactions/);
+
+    // 3. Owner deletes unwanted transaction
+    const delResult = ExpenseService.deleteExpense(ownerUser, unwanted.id, 'Accidental duplicate test entry');
+    assert.equal(delResult.success, true);
+    assert.equal(delResult.deletedId, unwanted.id);
+
+    // 4. Verify record is gone from DB
+    const fetched = ExpenseService.getExpenseById(testBizId, unwanted.id);
+    assert.equal(fetched, null);
+
+    const paymentRows = db.prepare('SELECT * FROM expense_payments WHERE expense_id = ?').all(unwanted.id);
+    assert.equal(paymentRows.length, 0);
+
+    // 5. Verify audit log entry exists
+    const auditRow = db.prepare(`
+      SELECT * FROM audit_logs
+      WHERE entity_id = ? AND action = 'delete'
+    `).get(unwanted.id);
+    assert.ok(auditRow);
+    assert.equal(auditRow.actor_user_id, ownerUser.id);
+    assert.equal(auditRow.reason, 'Accidental duplicate test entry');
+  });
 });
+
+

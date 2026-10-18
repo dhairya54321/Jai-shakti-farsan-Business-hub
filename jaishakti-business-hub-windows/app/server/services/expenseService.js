@@ -1,5 +1,8 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { getDatabase } from '../db/index.js';
+import config from '../config.js';
 
 // Safe 2-decimal monetary parsing and validation
 export function parseAndValidateAmount(val) {
@@ -70,6 +73,70 @@ export function logAudit(db, { businessId, actorUserId, entityType, entityId, ac
 }
 
 export const ExpenseService = {
+  /**
+   * Check if an active expense with the same invoice number & vendor, or same scanned receipt file already exists
+   */
+  checkDuplicateExpense(businessId, { vendor_id, invoice_number, stored_filename, excludeExpenseId = null }) {
+    const db = getDatabase();
+
+    // 1. Check by vendor and invoice number (Strong match for bills & invoices)
+    if (vendor_id && invoice_number && String(invoice_number).trim()) {
+      const cleanInvoice = String(invoice_number).trim();
+      let query = `
+        SELECT e.id, e.transaction_number, e.transaction_date, e.amount, e.invoice_number, e.vendor_id, v.name as vendor_name
+        FROM expenses e
+        LEFT JOIN vendors v ON v.id = e.vendor_id
+        WHERE e.business_id = ? 
+          AND e.approval_status != 'voided'
+          AND e.vendor_id = ?
+          AND UPPER(TRIM(COALESCE(e.invoice_number, ''))) = UPPER(?)
+      `;
+      const params = [businessId, vendor_id, cleanInvoice];
+      if (excludeExpenseId) {
+        query += ' AND e.id != ?';
+        params.push(excludeExpenseId);
+      }
+      const match = db.prepare(query).get(...params);
+      if (match) {
+        return {
+          isDuplicate: true,
+          matchType: 'invoice_number',
+          duplicate: match,
+          message: `An expense for Invoice #${match.invoice_number} from ${match.vendor_name || 'this vendor'} has already been recorded on ${match.transaction_date} for ₹${Number(match.amount).toFixed(2)} (${match.transaction_number}).`
+        };
+      }
+    }
+
+    // 2. Check by stored scanned receipt attachment (if the same scanned file is re-submitted)
+    if (stored_filename && String(stored_filename).trim()) {
+      let query = `
+        SELECT e.id, e.transaction_number, e.transaction_date, e.amount, e.invoice_number, e.vendor_id, v.name as vendor_name
+        FROM expense_attachments a
+        JOIN expenses e ON e.id = a.expense_id
+        LEFT JOIN vendors v ON v.id = e.vendor_id
+        WHERE a.business_id = ? 
+          AND e.approval_status != 'voided'
+          AND a.storage_key = ?
+      `;
+      const params = [businessId, String(stored_filename).trim()];
+      if (excludeExpenseId) {
+        query += ' AND e.id != ?';
+        params.push(excludeExpenseId);
+      }
+      const match = db.prepare(query).get(...params);
+      if (match) {
+        return {
+          isDuplicate: true,
+          matchType: 'stored_file',
+          duplicate: match,
+          message: `This receipt has already been attached to an existing expense on ${match.transaction_date} (${match.transaction_number}).`
+        };
+      }
+    }
+
+    return { isDuplicate: false, duplicate: null };
+  },
+
   // Create expense (handles both Quick and Detailed entry)
   createExpense(user, data, file = null) {
     const db = getDatabase();
@@ -107,6 +174,21 @@ export const ExpenseService = {
     const transactionDate = data.transaction_date || new Date().toISOString().slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(transactionDate)) {
       throw new Error('Transaction date must be in YYYY-MM-DD format.');
+    }
+
+    // Check for duplicate expense (by invoice number & vendor, or scanned receipt)
+    if (!data.allow_duplicate) {
+      const dupeCheck = this.checkDuplicateExpense(businessId, {
+        vendor_id: data.vendor_id,
+        invoice_number: data.invoice_number,
+        stored_filename: data.stored_filename
+      });
+      if (dupeCheck.isDuplicate) {
+        const error = new Error(dupeCheck.message);
+        error.code = 'DUPLICATE_EXPENSE';
+        error.duplicate = dupeCheck.duplicate;
+        throw error;
+      }
     }
 
     // Fetch business settings for approval workflow
@@ -238,6 +320,24 @@ export const ExpenseService = {
           file.originalname,
           file.mimetype,
           file.size,
+          user.id,
+          now
+        );
+      } else if (data.stored_filename) {
+        const attachmentId = 'att_' + crypto.randomUUID();
+        db.prepare(`
+          INSERT INTO expense_attachments (
+            id, business_id, expense_id, storage_key, original_filename,
+            content_type, file_size_bytes, uploaded_by, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          attachmentId,
+          businessId,
+          expenseId,
+          data.stored_filename,
+          data.stored_originalname || data.stored_filename,
+          data.stored_mimetype || 'image/jpeg',
+          parseInt(data.stored_size, 10) || 0,
           user.id,
           now
         );
@@ -483,6 +583,70 @@ export const ExpenseService = {
       });
 
       return ExpenseService.getExpenseById(businessId, expenseId);
+    })();
+  },
+
+  // Delete an unwanted expense (Owner/Manager only)
+  deleteExpense(user, expenseId, reason = 'Deleted by user') {
+    if (!['owner', 'manager'].includes(user.role)) {
+      throw new Error('Only owners and managers can delete transactions.');
+    }
+
+    const db = getDatabase();
+    const businessId = user.business_id;
+
+    return db.transaction(() => {
+      const expense = db.prepare(`
+        SELECT * FROM expenses WHERE id = ? AND business_id = ?
+      `).get(expenseId, businessId);
+
+      if (!expense) {
+        throw new Error('Expense not found.');
+      }
+
+      // Check for attached physical files to remove from uploads
+      const attachments = db.prepare(`
+        SELECT storage_key FROM expense_attachments WHERE expense_id = ?
+      `).all(expenseId);
+
+      for (const att of attachments) {
+        if (att.storage_key) {
+          const filePath = path.join(config.UPLOADS_DIR, att.storage_key);
+          if (fs.existsSync(filePath)) {
+            try { fs.unlinkSync(filePath); } catch (_) {}
+          }
+        }
+      }
+
+      // If linked to vendor_bills, decouple
+      db.prepare(`UPDATE vendor_bills SET expense_id = NULL WHERE expense_id = ?`).run(expenseId);
+
+      // Delete payments and attachments
+      db.prepare(`DELETE FROM expense_payments WHERE expense_id = ?`).run(expenseId);
+      db.prepare(`DELETE FROM expense_attachments WHERE expense_id = ?`).run(expenseId);
+
+      // Delete the expense record
+      db.prepare(`DELETE FROM expenses WHERE id = ? AND business_id = ?`).run(expenseId, businessId);
+
+      // Audit log the deletion
+      logAudit(db, {
+        businessId,
+        actorUserId: user.id,
+        entityType: 'expense',
+        entityId: expenseId,
+        action: 'delete',
+        prevValues: {
+          transaction_number: expense.transaction_number,
+          amount: expense.amount,
+          description: expense.description,
+          transaction_date: expense.transaction_date,
+          invoice_number: expense.invoice_number
+        },
+        newValues: null,
+        reason: reason || 'Transaction deleted'
+      });
+
+      return { success: true, deletedId: expenseId, transactionNumber: expense.transaction_number };
     })();
   },
 

@@ -13,6 +13,7 @@ import {
   ShoppingBag,
   Package,
   HandCoins,
+  Building2,
   X
 } from 'lucide-react';
 
@@ -26,6 +27,7 @@ export function Sidebar({ currentTab, setTab, isOpen, onClose }) {
     { id: 'dashboard', label: t('nav_dashboard'), icon: LayoutDashboard },
     { id: 'add_expense', label: t('nav_add_expense'), icon: PlusCircle, highlight: true },
     { id: 'transactions', label: t('nav_transactions'), icon: Receipt },
+    { id: 'vendors', label: t('nav_vendors'), icon: Building2 },
     { id: 'reports', label: t('nav_reports'), icon: BarChart3 },
     { id: 'categories', label: t('nav_categories'), icon: Sliders },
   ];
@@ -78,10 +80,10 @@ export function Sidebar({ currentTab, setTab, isOpen, onClose }) {
 
         {/* Navigation Links */}
         <div className="flex-1 overflow-y-auto px-3 py-4 space-y-6">
-          {/* Main Phase 1 Module */}
+          {/* Main Phase 1 & 2 Modules */}
           <div>
             <div className="px-3 mb-2 text-xs font-semibold uppercase tracking-wider text-amber-800/80">
-              Daily Expenses (Phase 1)
+              Expenses & Vendors (Phase 1 & 2)
             </div>
             <nav className="space-y-1">
               {mainNav.map((item) => {
@@ -170,7 +172,7 @@ export function Sidebar({ currentTab, setTab, isOpen, onClose }) {
         {/* Footer Info */}
         <div className="p-4 border-t border-slate-100 bg-slate-50/60 text-center">
           <div className="text-xs font-semibold text-slate-700">Jai Shakti Farsan Mart</div>
-          <div className="text-[11px] text-slate-400">Phase 1 v1.0.0 • SQLite WAL</div>
+          <div className="text-[11px] text-slate-400">Phase 2 v1.1.0 • SQLite WAL</div>
         </div>
       </aside>
     </>

@@ -13,12 +13,14 @@ import CategoriesSettings from './pages/CategoriesSettings';
 import UsersPage from './pages/UsersPage';
 import SystemHealth from './pages/SystemHealth';
 import WindowsHelp from './pages/WindowsHelp';
+import Vendors from './pages/Vendors';
 
 import {
   LayoutDashboard,
   PlusCircle,
   Receipt,
   BarChart3,
+  Building2,
   RefreshCw
 } from 'lucide-react';
 
@@ -86,6 +88,10 @@ export function App() {
             <Transactions onNavigate={(tab) => setCurrentTab(tab)} />
           )}
 
+          {currentTab === 'vendors' && (
+            <Vendors />
+          )}
+
           {currentTab === 'reports' && (
             <Reports />
           )}
@@ -109,11 +115,12 @@ export function App() {
       </div>
 
       {/* Mobile Bottom Navigation Bar */}
-      <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur border-t border-slate-200 z-30 flex items-center justify-around h-16 px-2 shadow-lg">
+      <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur border-t border-slate-200 z-30 flex items-center justify-around h-16 px-1 shadow-lg">
         {[
           { id: 'dashboard', label: t('nav_dashboard'), icon: LayoutDashboard },
           { id: 'add_expense', label: t('btn_quick_entry'), icon: PlusCircle, isMain: true },
           { id: 'transactions', label: t('nav_transactions'), icon: Receipt },
+          { id: 'vendors', label: t('nav_vendors'), icon: Building2 },
           { id: 'reports', label: t('nav_reports'), icon: BarChart3 },
         ].map((item) => {
           const Icon = item.icon;

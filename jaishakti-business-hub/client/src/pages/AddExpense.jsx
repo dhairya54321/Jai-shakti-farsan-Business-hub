@@ -41,7 +41,9 @@ import {
   Search,
   ChevronDown,
   ChevronUp,
-  X
+  X,
+  Camera,
+  Loader2
 } from 'lucide-react';
 
 const ICON_MAP = {
@@ -242,7 +244,7 @@ function SearchableCategoryDropdown({ categories, categoryId, onSelect, lang, t 
 }
 
 export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
-  const { lang, t, formatINR } = useLanguage();
+  const { lang, t, formatINR, formatDate } = useLanguage();
   const { user } = useAuth();
 
   const [mode, setMode] = useState('quick'); // 'quick' | 'detailed'
@@ -263,6 +265,16 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
   const [referenceNumber, setReferenceNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [receiptFile, setReceiptFile] = useState(null);
+
+  // Bill OCR / Scanning State
+  const [scanning, setScanning] = useState(false);
+  const [scanMessage, setScanMessage] = useState(null);
+  const [storedFileInfo, setStoredFileInfo] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [decodedItems, setDecodedItems] = useState([]);
+  const [duplicateExpense, setDuplicateExpense] = useState(null);
+  const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
 
   // Submission State
   const [submitting, setSubmitting] = useState(false);
@@ -332,6 +344,224 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
     }
   };
 
+  const mapExtractedToCategory = (extracted, availableCategories) => {
+    const text = `${extracted.vendorCategory || ''} ${extracted.vendorName || ''} ${extracted.notes || ''} ${extracted.itemsSummary || ''} ${(extracted.items || []).map(i => i.description).join(' ')}`.toLowerCase();
+
+    if (/packag|box|pouch|bag|carton|bardana|પેકિંગ|બોક્સ|કોથળી/i.test(text)) {
+      const cat = availableCategories.find(c => c.code === 'packaging_materials');
+      if (cat) return cat.id;
+    }
+    if (/finished|khakhra|farsan|sweet|snack|gathiya|sev|chavanu|thepla|થેપલા|તૈયાર|ખાખરા/i.test(text)) {
+      const cat = availableCategories.find(c => c.code === 'finished_goods');
+      if (cat) return cat.id;
+    }
+    if (/vegetable|potato|onion|tomato|ginger|chilli|bataka|dungri|shakbhaji|શાકભાજી|બટાકા/i.test(text)) {
+      const cat = availableCategories.find(c => c.code === 'vegetable_purchase');
+      if (cat) return cat.id;
+    }
+    if (/clean|detergent|soap|acid|phenyl|wipe|સફાઈ|સાબુ/i.test(text)) {
+      const cat = availableCategories.find(c => c.code === 'cleaning_supplies');
+      if (cat) return cat.id;
+    }
+    if (/electric|power|lpg|gas|cylinder|utility|torrent|ugvcl|pgvcl|વીજળી|ગેસ/i.test(text)) {
+      const cat = availableCategories.find(c => c.code === 'electricity_utilities');
+      if (cat) return cat.id;
+    }
+    if (/repair|maint|spare|machine|welding|grease|bearing|સમારકામ/i.test(text)) {
+      const cat = availableCategories.find(c => c.code === 'repairs_maintenance');
+      if (cat) return cat.id;
+    }
+    if (/transport|delivery|freight|tempo|rickshaw|cartage|ટ્રાન્સપોર્ટ|ભાડું/i.test(text)) {
+      const cat = availableCategories.find(c => c.code === 'transport_delivery');
+      if (cat) return cat.id;
+    }
+    if (/tea|coffee|milk|snack|refreshment|ચા|નાસ્તો/i.test(text)) {
+      const cat = availableCategories.find(c => c.code === 'tea_refreshment');
+      if (cat) return cat.id;
+    }
+    const rawCat = availableCategories.find(c => c.code === 'raw_materials');
+    return rawCat ? rawCat.id : null;
+  };
+
+  const handleScanReceipt = async (file) => {
+    if (!file) return;
+
+    setReceiptFile(file);
+    if (file.type && file.type.startsWith('image/')) {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(URL.createObjectURL(file));
+    } else {
+      setPreviewUrl(null);
+    }
+
+    setScanning(true);
+    setScanMessage(null);
+    setErrorMessage('');
+
+    try {
+      const formData = new FormData();
+      formData.append('receipt', file);
+      formData.append('bill', file);
+      const activeKey = localStorage.getItem('js_gemini_api_key') || '';
+      if (activeKey) {
+        formData.append('geminiApiKey', activeKey);
+      }
+
+      let res;
+      try {
+        res = await apiFetch('/api/expenses/scan-receipt', {
+          method: 'POST',
+          body: formData,
+          headers: activeKey ? { 'x-gemini-api-key': activeKey } : {}
+        });
+      } catch (errScan) {
+        console.warn('scan-receipt route note, falling back to /api/vendors/scan-bill:', errScan.message);
+        res = await apiFetch('/api/vendors/scan-bill', {
+          method: 'POST',
+          body: formData,
+          headers: activeKey ? { 'x-gemini-api-key': activeKey } : {}
+        });
+      }
+
+      if (res.file) {
+        setStoredFileInfo(res.file);
+      }
+
+      const extracted = res.ocr?.extracted || {};
+      const itemsList = Array.isArray(extracted.items) ? extracted.items : [];
+      setDecodedItems(itemsList);
+
+      // 1. Amount
+      if (extracted.totalAmount !== null && extracted.totalAmount !== undefined && Number(extracted.totalAmount) > 0) {
+        setAmount(String(extracted.totalAmount));
+      }
+
+      // 2. Date
+      if (extracted.invoiceDate) {
+        setTransactionDate(extracted.invoiceDate);
+      }
+
+      // 3. Invoice Number
+      if (extracted.invoiceNumber) {
+        setInvoiceNumber(extracted.invoiceNumber);
+      }
+
+      // 4. Notes & Decoded Items Summary
+      if (extracted.notes) {
+        setNotes(extracted.notes);
+      } else if (extracted.itemsSummary) {
+        setNotes(extracted.itemsSummary);
+      }
+
+      // 5. Title / Description
+      const autoDesc = extracted.vendorName && itemsList.length > 0 && itemsList[0].description
+        ? `${itemsList[0].description} - ${extracted.vendorName}`
+        : (extracted.vendorName ? `Bill from ${extracted.vendorName}` : (itemsList[0]?.description || ''));
+      if (autoDesc) {
+        setDescription(autoDesc);
+      }
+
+      // 6. Category Auto-detection
+      const matchedCatId = mapExtractedToCategory(extracted, categories);
+      if (matchedCatId) {
+        setCategoryId(matchedCatId);
+      }
+
+      // 7. Vendor Matching or Auto-creation
+      let matchedVendor = null;
+      if (extracted.vendorId) {
+        matchedVendor = vendors.find(v => v.id === extracted.vendorId) || { id: extracted.vendorId, name: extracted.vendorName };
+      }
+      if (!matchedVendor && res.duplicates && res.duplicates.length > 0) {
+        matchedVendor = res.duplicates[0].vendor;
+      }
+      if (!matchedVendor && extracted.vendorName) {
+        const cleanName = extracted.vendorName.trim().toLowerCase();
+        matchedVendor = vendors.find(v =>
+          (v.name && v.name.trim().toLowerCase() === cleanName) ||
+          (extracted.gstin && v.gstin && v.gstin.toUpperCase() === extracted.gstin.toUpperCase()) ||
+          (extracted.phone && v.phone && v.phone.replace(/\D/g, '') === extracted.phone.replace(/\D/g, '')) ||
+          (v.name && cleanName.length >= 4 && (v.name.toLowerCase().includes(cleanName) || cleanName.includes(v.name.toLowerCase())))
+        );
+      }
+
+      if (matchedVendor) {
+        setVendorId(matchedVendor.id);
+      } else if (extracted.vendorName && extracted.vendorName.trim()) {
+        // Auto-create vendor so it appears in the select dropdown immediately
+        try {
+          const cleanPhone = extracted.phone ? extracted.phone.replace(/[^0-9]/g, '').slice(-10) : null;
+          const validPhone = cleanPhone && cleanPhone.length === 10 ? cleanPhone : null;
+          const cleanGstin = extracted.gstin ? extracted.gstin.trim().toUpperCase() : null;
+          const validGstin = cleanGstin && cleanGstin.length === 15 ? cleanGstin : null;
+
+          const newVenRes = await apiFetch('/api/vendors', {
+            method: 'POST',
+            body: JSON.stringify({
+              name: extracted.vendorName.trim(),
+              category: extracted.vendorCategory || 'Raw Materials',
+              phone: validPhone,
+              gstin: validGstin,
+              address: extracted.address || null,
+              city: extracted.city || null,
+              state: extracted.state || 'Gujarat',
+              allowDuplicate: true
+            })
+          });
+          if (newVenRes.vendor) {
+            setVendors(prev => [...prev, newVenRes.vendor]);
+            setVendorId(newVenRes.vendor.id);
+          }
+        } catch (vErr) {
+          console.warn('Vendor auto-create note:', vErr.message);
+        }
+      }
+
+      // 8. Duplicate Expense Detection
+      if (res.isDuplicateExpense && res.duplicateExpense) {
+        setDuplicateExpense(res.duplicateExpense);
+      } else {
+        setDuplicateExpense(null);
+      }
+
+      const itemCount = itemsList.length;
+      const countMsg = itemCount > 0 
+        ? (lang === 'gu' ? `${itemCount} વસ્તુઓ અને જથ્થો વિગતોમાં ઉમેરાયો` : `${itemCount} items & quantities decoded into notes`)
+        : '';
+
+      if (res.isDuplicateExpense && res.duplicateExpense) {
+        setScanMessage({
+          type: 'warning',
+          text: lang === 'gu'
+            ? `ચેતવણી: આ બિલ માટેનો ખર્ચ પહેલેથી જ નોંધાઈ ગયો છે (${res.duplicateExpense.transaction_number})`
+            : `Warning: This bill was already recorded (${res.duplicateExpense.transaction_number})`,
+          details: lang === 'gu'
+            ? `ઇન્વોઇસ #${res.duplicateExpense.invoice_number || 'N/A'}, રકમ ₹${res.duplicateExpense.amount}`
+            : `Invoice #${res.duplicateExpense.invoice_number || 'N/A'}, Amount ₹${res.duplicateExpense.amount}`
+        });
+      } else {
+        setScanMessage({
+          type: 'success',
+          text: lang === 'gu'
+            ? `બિલ સ્કેન સફળ! રકમ ${extracted.totalAmount ? '₹' + extracted.totalAmount : ''} અને તમામ વિગતો ભરાઈ ગઈ છે.`
+            : `Bill scanned successfully! Amount ${extracted.totalAmount ? '₹' + extracted.totalAmount : ''} and criteria filled.`,
+          details: countMsg
+        });
+      }
+
+    } catch (err) {
+      console.error('Scan receipt error:', err);
+      setScanMessage({
+        type: 'warning',
+        text: lang === 'gu'
+          ? 'બિલ અસ્પષ્ટ છે અથવા વિગતો સ્કેન કરવામાં વિલંબ થયો. તમે વિગતો જાતે ચકાસીને ભરી શકો છો.'
+          : 'Could not auto-extract all fields from bill. Please verify and fill details manually.'
+      });
+    } finally {
+      setScanning(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErrorMessage('');
@@ -367,7 +597,13 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
         if (invoiceNumber) formData.append('invoice_number', invoiceNumber);
         if (referenceNumber) formData.append('reference_number', referenceNumber);
         if (notes) formData.append('notes', notes);
-        formData.append('receipt', receiptFile);
+        if (receiptFile) formData.append('receipt', receiptFile);
+        if (storedFileInfo?.filename) {
+          formData.append('stored_filename', storedFileInfo.filename);
+          formData.append('stored_originalname', storedFileInfo.originalname || '');
+          formData.append('stored_mimetype', storedFileInfo.mimetype || '');
+          formData.append('stored_size', String(storedFileInfo.size || 0));
+        }
 
         res = await apiFetch('/api/expenses', {
           method: 'POST',
@@ -388,7 +624,11 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
             description: description || null,
             invoice_number: invoiceNumber || null,
             reference_number: referenceNumber || null,
-            notes: notes || null
+            notes: notes || null,
+            stored_filename: storedFileInfo?.filename || null,
+            stored_originalname: storedFileInfo?.originalname || null,
+            stored_mimetype: storedFileInfo?.mimetype || null,
+            stored_size: storedFileInfo?.size || null
           })
         });
       }
@@ -400,13 +640,28 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
       setDescription('');
       setInvoiceNumber('');
       setReferenceNumber('');
+      setNotes('');
       setReceiptFile(null);
+      setStoredFileInfo(null);
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(null);
+      setDecodedItems([]);
+      setScanMessage(null);
+      setDuplicateExpense(null);
       setPaidAmount('');
       setPaymentStatus('paid');
 
       if (onSaved) onSaved(res.expense);
     } catch (err) {
-      setErrorMessage(err.message || 'Failed to save expense');
+      if (err.message && (err.message.includes('already been recorded') || err.message.includes('DUPLICATE_EXPENSE'))) {
+        setErrorMessage(
+          lang === 'gu'
+            ? 'તમે આ ખર્ચ પહેલેથી જ અપલોડ કરી ચૂક્યા છો. ડુપ્લિકેટ એન્ટ્રી મંજૂર નથી.'
+            : 'You uploaded this expense already. Duplicate entries are not permitted.'
+        );
+      } else {
+        setErrorMessage(err.message || 'Failed to save expense');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -589,11 +844,234 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
 
         {/* Section: Additional Detailed Fields (Only in Detailed Mode) */}
         {mode === 'detailed' && (
-          <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/80 shadow-sm space-y-4 animate-fade-in">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 pb-1 border-b border-slate-100">
-              {lang === 'gu' ? 'વધારાની વિગતો' : 'Additional Details'}
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/80 shadow-sm space-y-5 animate-fade-in">
+            {/* Header with AI Badge */}
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-500" />
+                <span>{lang === 'gu' ? 'બિલ સ્કેન અને વધારાની વિગતો' : 'Attach Receipt & Additional Details'}</span>
+              </h3>
+              <span className="text-[11px] font-bold text-amber-800 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200/70">
+                {lang === 'gu' ? 'AI ઓટો-ફિલ ઉપલબ્ધ' : 'AI Auto-Fill Enabled'}
+              </span>
+            </div>
+
+            {/* 1. TOP ATTACH RECEIPT / BILL COMPONENT */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                  <Upload className="w-4 h-4 text-amber-600" />
+                  <span>{t('lbl_attach_receipt_top')}</span>
+                </label>
+                <span className="text-[11px] text-slate-400">
+                  {lang === 'gu' ? 'JPG, PNG, PDF (મહત્તમ 10MB)' : 'JPG, PNG, PDF (Max 10MB)'}
+                </span>
+              </div>
+
+              {/* Hidden Inputs for File and Camera */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,application/pdf"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files && e.target.files[0]) {
+                    handleScanReceipt(e.target.files[0]);
+                  }
+                }}
+              />
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files && e.target.files[0]) {
+                    handleScanReceipt(e.target.files[0]);
+                  }
+                }}
+              />
+
+              {/* Upload Zone / Active State / Preview */}
+              {scanning ? (
+                <div className="flex flex-col items-center justify-center p-6 sm:p-8 bg-amber-50/60 rounded-2xl border-2 border-dashed border-amber-400 animate-pulse">
+                  <Loader2 className="w-9 h-9 text-amber-600 animate-spin mb-3" />
+                  <p className="text-sm font-bold text-slate-900">{t('lbl_analyzing_bill')}</p>
+                  <p className="text-xs text-slate-600 text-center max-w-md mt-1">
+                    {t('lbl_extracting_items')}
+                  </p>
+                </div>
+              ) : receiptFile ? (
+                <div className="p-3.5 sm:p-4 bg-amber-50/50 rounded-2xl border border-amber-300/80 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    {previewUrl ? (
+                      <img
+                        src={previewUrl}
+                        alt="Receipt preview"
+                        className="w-14 h-14 object-cover rounded-xl border border-amber-200 shrink-0 bg-white shadow-xs"
+                      />
+                    ) : (
+                      <div className="w-14 h-14 rounded-xl bg-amber-100/80 text-amber-800 flex items-center justify-center shrink-0 border border-amber-200">
+                        <FileText className="w-7 h-7" />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-slate-900 truncate">
+                          {receiptFile.name}
+                        </span>
+                        <span className="text-[10px] text-emerald-800 font-bold bg-emerald-100 px-2 py-0.5 rounded-full shrink-0 flex items-center gap-1">
+                          <Check className="w-3 h-3" />
+                          {lang === 'gu' ? 'જોડાયેલ' : 'Attached'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {(receiptFile.size / 1024).toFixed(0)} KB • {lang === 'gu' ? 'બિલ સ્કેન થઈ ચૂક્યું છે' : 'Scanned & Decoded'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex-1 sm:flex-none px-3 py-1.5 text-xs font-bold text-amber-900 bg-white border border-amber-300 rounded-xl hover:bg-amber-100/50 transition shadow-xs"
+                    >
+                      {lang === 'gu' ? 'બદલો' : 'Change'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReceiptFile(null);
+                        setStoredFileInfo(null);
+                        if (previewUrl) URL.revokeObjectURL(previewUrl);
+                        setPreviewUrl(null);
+                        setDecodedItems([]);
+                        setScanMessage(null);
+                        setDuplicateExpense(null);
+                      }}
+                      className="flex-1 sm:flex-none px-3 py-1.5 text-xs font-semibold text-red-600 hover:text-red-700 bg-white border border-red-200 rounded-xl hover:bg-red-50 transition shadow-xs"
+                    >
+                      {lang === 'gu' ? 'દૂર કરો' : 'Remove'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-5 sm:p-6 bg-slate-50/70 hover:bg-amber-50/30 rounded-2xl border-2 border-dashed border-slate-300 hover:border-amber-400 transition text-center space-y-3">
+                  <div className="w-11 h-11 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto shadow-xs">
+                    <Upload className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="text-xs sm:text-sm font-bold text-slate-800">
+                      {lang === 'gu' ? 'બિલ અપલોડ કરો અથવા ફોટો પાડો' : 'Upload invoice or take a photo'}
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-1 max-w-md mx-auto">
+                      {t('lbl_attach_receipt_sub')}
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-center gap-2.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-sm shadow-amber-500/25 transition active:scale-[0.98]"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{t('btn_choose_file')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => cameraInputRef.current?.click()}
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs border border-slate-300 transition active:scale-[0.98]"
+                    >
+                      <Camera className="w-3.5 h-3.5 text-slate-500" />
+                      <span>{t('btn_take_photo')}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Duplicate Expense Warning Banner */}
+              {duplicateExpense && (
+                <div className="p-4 rounded-xl border border-red-300 bg-red-50 text-red-900 flex items-start gap-3 shadow-sm">
+                  <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                  <div className="flex-1 text-xs sm:text-sm">
+                    <div className="font-bold text-red-800 text-sm sm:text-base flex items-center gap-1.5">
+                      <span>{t('msg_duplicate_expense_title')}</span>
+                    </div>
+                    <p className="mt-1 text-red-700 leading-relaxed">
+                      {lang === 'gu'
+                        ? `આ બિલ/ખર્ચ પહેલેથી જ તારીખ ${formatDate(duplicateExpense.transaction_date)} ના રોજ નોંધાઈ ગયો છે (ઇન્વોઇસ #${duplicateExpense.invoice_number || 'N/A'}, રકમ ${formatINR(duplicateExpense.amount)}, રેફરન્સ: ${duplicateExpense.transaction_number}). ડુપ્લિકેટ એન્ટ્રી મંજૂર નથી.`
+                        : `An expense for this bill has already been recorded on ${formatDate(duplicateExpense.transaction_date)} (Invoice #${duplicateExpense.invoice_number || 'N/A'}, Amount ${formatINR(duplicateExpense.amount)}, Ref: ${duplicateExpense.transaction_number}). Duplicate entries are not permitted.`}
+                    </p>
+                    <div className="mt-2 text-xs font-bold text-red-700 bg-white/80 inline-block px-2.5 py-1 rounded-md border border-red-200">
+                      {t('btn_duplicate_blocked')}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Scan Feedback Banner */}
+              {scanMessage && !duplicateExpense && (
+                <div className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 animate-fade-in ${
+                  scanMessage.type === 'success'
+                    ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                    : 'bg-amber-50 text-amber-900 border-amber-200'
+                }`}>
+                  {scanMessage.type === 'success' ? (
+                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  )}
+                  <div className="min-w-0">
+                    <p className="font-bold">{scanMessage.text}</p>
+                    {scanMessage.details && (
+                      <p className="text-[11px] opacity-80 mt-0.5">{scanMessage.details}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Decoded Items Display */}
+              {decodedItems.length > 0 && (
+                <div className="bg-amber-50/70 p-3.5 rounded-xl border border-amber-200/80 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-bold text-amber-950">
+                    <span className="flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                      {t('lbl_decoded_items')} ({decodedItems.length})
+                    </span>
+                    <span className="text-[10px] text-amber-800 font-semibold bg-amber-100/90 px-2 py-0.5 rounded-full">
+                      {lang === 'gu' ? 'નોંધમાં ઉમેરાઈ ગયું' : 'Added to notes'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {decodedItems.map((item, idx) => (
+                      <div
+                        key={idx}
+                        className="bg-white p-2 rounded-lg border border-amber-200/60 flex items-center justify-between text-xs shadow-xs"
+                      >
+                        <div className="min-w-0 truncate pr-2">
+                          <span className="font-bold text-slate-800">{item.description}</span>
+                          {item.quantity && (
+                            <span className="ml-1.5 text-[11px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
+                              {item.quantity}
+                            </span>
+                          )}
+                        </div>
+                        {(item.amount || item.rate) && (
+                          <span className="font-bold text-slate-900 shrink-0">
+                            {item.amount ? `₹${item.amount}` : `@ ₹${item.rate}`}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* 2. CRITERIA FIELDS GRID */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-1">
               {/* Date */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -679,7 +1157,12 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
                   type="text"
                   placeholder="e.g. INV-9842"
                   value={invoiceNumber}
-                  onChange={(e) => setInvoiceNumber(e.target.value)}
+                  onChange={(e) => {
+                    setInvoiceNumber(e.target.value);
+                    if (duplicateExpense && duplicateExpense.invoice_number !== e.target.value) {
+                      setDuplicateExpense(null);
+                    }
+                  }}
                   className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
                 />
               </div>
@@ -699,41 +1182,6 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
               </div>
             </div>
 
-            {/* Receipt Attachment Upload */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {t('lbl_receipt_attachment')}
-              </label>
-              <div className="flex items-center gap-3">
-                <label className="flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-300 hover:bg-slate-50 cursor-pointer text-xs font-semibold text-slate-700 transition">
-                  <Upload className="w-4 h-4 text-amber-600" />
-                  <span>{receiptFile ? receiptFile.name : (lang === 'gu' ? 'ફોટો / ફાઈલ પસંદ કરો' : 'Choose file')}</span>
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp,application/pdf"
-                    className="hidden"
-                    onChange={(e) => {
-                      if (e.target.files && e.target.files[0]) {
-                        setReceiptFile(e.target.files[0]);
-                      }
-                    }}
-                  />
-                </label>
-                {receiptFile && (
-                  <button
-                    type="button"
-                    onClick={() => setReceiptFile(null)}
-                    className="text-xs text-red-600 hover:underline"
-                  >
-                    Remove
-                  </button>
-                )}
-              </div>
-              <p className="text-[11px] text-slate-400 mt-1">
-                Max 10MB • Private storage
-              </p>
-            </div>
-
             {/* Additional Notes */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -751,11 +1199,23 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
         )}
 
         {/* Submit Button Area */}
-        <div className="flex items-center justify-end gap-3 pt-2">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+          {duplicateExpense ? (
+            <div className="flex items-center gap-2 text-xs font-bold text-red-600 bg-red-50 border border-red-200 px-3 py-2 rounded-xl w-full sm:w-auto">
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+              <span>{t('btn_duplicate_blocked')}</span>
+            </div>
+          ) : (
+            <div className="hidden sm:block" />
+          )}
           <button
             type="submit"
-            disabled={submitting || !amount || parseFloat(amount) <= 0}
-            className="w-full sm:w-auto px-8 py-3.5 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white font-black text-sm rounded-xl shadow-lg shadow-amber-500/25 flex items-center justify-center gap-2 transition disabled:opacity-50"
+            disabled={submitting || !amount || parseFloat(amount) <= 0 || !!duplicateExpense}
+            className={`w-full sm:w-auto px-8 py-3.5 text-white font-black text-sm rounded-xl shadow-lg flex items-center justify-center gap-2 transition disabled:opacity-50 ${
+              duplicateExpense
+                ? 'bg-slate-400 cursor-not-allowed shadow-none'
+                : 'bg-amber-500 hover:bg-amber-600 active:bg-amber-700 shadow-amber-500/25'
+            }`}
           >
             <span>{submitting ? t('btn_saving') : t('btn_save_expense')}</span>
             <ArrowRight className="w-4 h-4" />

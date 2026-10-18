@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import config from './config.js';
 import { getDatabase, closeDatabase } from './db/index.js';
@@ -117,30 +118,49 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start Server
-const HOST = process.env.HOST || '0.0.0.0';
-const server = app.listen(config.PORT, HOST, () => {
-  console.log('====================================================');
-  console.log(`  Jai Shakti Business Hub - Server Started`);
-  console.log(`  Local URL:    http://localhost:${config.PORT}`);
-  console.log(`  Network URL:  http://192.168.0.119:${config.PORT} (for Mobile/Tablet)`);
-  console.log(`  Environment:  ${config.NODE_ENV}`);
-  console.log(`  Database:     ${config.DB_PATH}`);
-  console.log(`  Timezone:     ${config.BUSINESS_TIMEZONE}`);
-  console.log('====================================================');
-});
+// Start Server (only when running directly or not in test suite)
+let server = null;
+const isTest = process.env.NODE_ENV === 'test' || (process.argv[1] && process.argv[1].includes('test'));
 
-// Port conflict error handling
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`\n[FATAL ERROR] Port ${config.PORT} is already in use by another application!`);
-    console.error(`Please stop the existing process or set a different PORT in your .env file.`);
-    console.error(`Example: PORT=3001\n`);
-  } else {
-    console.error('Server startup error:', err);
+if (!isTest) {
+  const HOST = process.env.HOST || '0.0.0.0';
+  const nets = os.networkInterfaces();
+  const netIps = [];
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === 'IPv4' && !net.internal) {
+        netIps.push(net.address);
+      }
+    }
   }
-  process.exit(1);
-});
+  const displayIp = netIps[0] || 'localhost';
+
+  server = app.listen(config.PORT, HOST, () => {
+    console.log('====================================================');
+    console.log(`  Jai Shakti Business Hub - Server Started`);
+    console.log(`  Local URL:    http://localhost:${config.PORT}`);
+    console.log(`  Network URL:  http://${displayIp}:${config.PORT} (for Mobile/Tablet)`);
+    if (netIps.length > 1) {
+      console.log(`  Alt IPs:      ${netIps.slice(1).map(ip => `http://${ip}:${config.PORT}`).join(', ')}`);
+    }
+    console.log(`  Environment:  ${config.NODE_ENV}`);
+    console.log(`  Database:     ${config.DB_PATH}`);
+    console.log(`  Timezone:     ${config.BUSINESS_TIMEZONE}`);
+    console.log('====================================================');
+  });
+
+  // Port conflict error handling
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n[FATAL ERROR] Port ${config.PORT} is already in use by another application!`);
+      console.error(`Please stop the existing process or set a different PORT in your .env file.`);
+      console.error(`Example: PORT=3001\n`);
+    } else {
+      console.error('Server startup error:', err);
+    }
+    process.exit(1);
+  });
+}
 
 // Graceful shutdown handling
 function handleGracefulShutdown(signal) {

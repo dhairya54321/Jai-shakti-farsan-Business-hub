@@ -22,7 +22,7 @@ router.get('/', (req, res) => {
 
 // PUT /api/settings - Update business settings (Owner only)
 router.put('/', requireRole(['owner']), (req, res) => {
-  const { approval_threshold, require_approval_above_threshold, auto_approve_staff_expenses } = req.body;
+  const { approval_threshold, require_approval_above_threshold, auto_approve_staff_expenses, gemini_api_key } = req.body;
   const db = getDatabase();
 
   let threshold = 5000.00;
@@ -32,20 +32,40 @@ router.put('/', requireRole(['owner']), (req, res) => {
 
   const now = new Date().toISOString();
 
-  db.prepare(`
-    UPDATE business_settings SET
-      approval_threshold = ?,
-      require_approval_above_threshold = ?,
-      auto_approve_staff_expenses = ?,
-      updated_at = ?
-    WHERE business_id = ?
-  `).run(
-    threshold,
-    require_approval_above_threshold ? 1 : 0,
-    auto_approve_staff_expenses ? 1 : 0,
-    now,
-    req.user.business_id
-  );
+  // If gemini_api_key is explicitly provided in body
+  if (gemini_api_key !== undefined) {
+    db.prepare(`
+      UPDATE business_settings SET
+        approval_threshold = ?,
+        require_approval_above_threshold = ?,
+        auto_approve_staff_expenses = ?,
+        gemini_api_key = ?,
+        updated_at = ?
+      WHERE business_id = ?
+    `).run(
+      threshold,
+      require_approval_above_threshold ? 1 : 0,
+      auto_approve_staff_expenses ? 1 : 0,
+      gemini_api_key ? gemini_api_key.trim() : null,
+      now,
+      req.user.business_id
+    );
+  } else {
+    db.prepare(`
+      UPDATE business_settings SET
+        approval_threshold = ?,
+        require_approval_above_threshold = ?,
+        auto_approve_staff_expenses = ?,
+        updated_at = ?
+      WHERE business_id = ?
+    `).run(
+      threshold,
+      require_approval_above_threshold ? 1 : 0,
+      auto_approve_staff_expenses ? 1 : 0,
+      now,
+      req.user.business_id
+    );
+  }
 
   const updated = db.prepare('SELECT * FROM business_settings WHERE business_id = ?').get(req.user.business_id);
   res.json({ success: true, settings: updated });

@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS business_settings (
   auto_approve_staff_expenses INTEGER NOT NULL DEFAULT 0,
   default_language TEXT NOT NULL DEFAULT 'gu',
   timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',
+  gemini_api_key TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -208,3 +209,4 @@ CREATE INDEX IF NOT EXISTS idx_attachments_expense ON expense_attachments(expens
 CREATE INDEX IF NOT EXISTS idx_audit_logs_biz_time ON audit_logs(business_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
 `;
+

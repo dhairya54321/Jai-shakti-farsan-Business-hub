@@ -32,6 +32,11 @@ export function getDatabase(dbFilePath = config.DB_PATH) {
 export function closeDatabase() {
   if (dbInstance) {
     try {
+      dbInstance.pragma('wal_checkpoint(TRUNCATE)');
+    } catch (e) {
+      // Ignore if database is already in non-WAL mode or closing
+    }
+    try {
       dbInstance.close();
     } catch (e) {
       console.error('Error closing database:', e);

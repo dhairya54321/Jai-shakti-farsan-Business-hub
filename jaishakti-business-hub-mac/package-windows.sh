@@ -26,6 +26,13 @@ rm -rf "$WIN_APP_DIR/server"
 mkdir -p "$WIN_APP_DIR/server"
 cp -R "$APP_SRC/server/" "$WIN_APP_DIR/server/"
 cp "$APP_SRC/package.json" "$WIN_APP_DIR/"
+cp "$APP_SRC/package-lock.json" "$WIN_APP_DIR/" 2>/dev/null || true
+
+# Copy offline OCR traineddata model
+if [ -f "$APP_SRC/eng.traineddata" ]; then
+  cp "$APP_SRC/eng.traineddata" "$WIN_APP_DIR/"
+  cp "$APP_SRC/eng.traineddata" "$WIN_DIR/"
+fi
 
 # 4. Copy production node_modules or package manifest
 echo "[4/4] Copying package configuration..."

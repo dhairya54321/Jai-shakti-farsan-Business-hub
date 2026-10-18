@@ -17,7 +17,8 @@ import {
   AlertCircle,
   ArrowUpDown,
   RefreshCw,
-  Plus
+  Plus,
+  Trash2
 } from 'lucide-react';
 
 export function Transactions({ onNavigate }) {
@@ -47,6 +48,12 @@ export function Transactions({ onNavigate }) {
 
   // Quick Action feedback
   const [actionNotice, setActionNotice] = useState('');
+
+  // Delete State
+  const [expenseToDelete, setExpenseToDelete] = useState(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   const fetchCategoriesAndVendors = async () => {
     try {
@@ -147,6 +154,30 @@ export function Transactions({ onNavigate }) {
       fetchTransactions(pagination.page);
     } catch (err) {
       alert(err.message);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!expenseToDelete) return;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await apiFetch(`/api/expenses/${expenseToDelete.id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ reason: deleteReason.trim() })
+      });
+      setActionNotice(t('msg_tx_deleted_success'));
+      setTimeout(() => setActionNotice(''), 4000);
+      setExpenseToDelete(null);
+      setDeleteReason('');
+      if (selectedExpense && selectedExpense.id === expenseToDelete.id) {
+        setSelectedExpense(null);
+      }
+      fetchTransactions(pagination.page);
+    } catch (err) {
+      setDeleteError(err.message || 'Failed to delete transaction');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -363,14 +394,40 @@ export function Transactions({ onNavigate }) {
                       {formatINR(tx.total_paid || 0)}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        tx.approval_status === 'approved' ? 'bg-emerald-100 text-emerald-800' :
-                        tx.approval_status === 'pending_approval' ? 'bg-amber-100 text-amber-800' :
-                        tx.approval_status === 'voided' ? 'bg-slate-200 text-slate-700' :
-                        'bg-red-100 text-red-800'
-                      }`}>
-                        {t(`as_${tx.approval_status}`)}
-                      </span>
+                      {tx.approval_status === 'voided' ? (
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700 border border-slate-300">
+                          {t('as_voided')}
+                        </span>
+                      ) : tx.approval_status === 'rejected' ? (
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-800 border border-red-200">
+                          {t('as_rejected')}
+                        </span>
+                      ) : (
+                        <div className="flex flex-col gap-0.5 items-start">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-1.5 ${
+                            tx.payment_status === 'paid'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200/80'
+                              : tx.payment_status === 'partially_paid'
+                              ? 'bg-amber-100 text-amber-800 border border-amber-200/80'
+                              : 'bg-rose-100 text-rose-800 border border-rose-200/80'
+                          }`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${
+                              tx.payment_status === 'paid' ? 'bg-emerald-600' :
+                              tx.payment_status === 'partially_paid' ? 'bg-amber-600' : 'bg-rose-600'
+                            }`} />
+                            {tx.payment_status === 'paid'
+                              ? (lang === 'gu' ? 'ચૂકવેલ' : 'Paid')
+                              : tx.payment_status === 'partially_paid'
+                              ? (lang === 'gu' ? 'અંશતઃ ચૂકવેલ' : 'Partially Paid')
+                              : (lang === 'gu' ? 'બાકી ચૂકવણી' : 'Payment Pending')}
+                          </span>
+                          {tx.approval_status === 'pending_approval' && (
+                            <span className="text-[9px] text-amber-700 font-semibold pl-1">
+                              • {t('as_pending_approval')}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap text-right space-x-1">
                       {isOwnerOrManager && tx.approval_status === 'pending_approval' && (
@@ -398,6 +455,20 @@ export function Transactions({ onNavigate }) {
                         <Eye className="w-3.5 h-3.5" />
                         <span>{t('btn_view_details')}</span>
                       </button>
+                      {isOwnerOrManager && (
+                        <button
+                          onClick={() => {
+                            setExpenseToDelete(tx);
+                            setDeleteReason('');
+                            setDeleteError('');
+                          }}
+                          className="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 hover:text-red-800 rounded-lg font-bold text-[11px] inline-flex items-center gap-1 transition border border-red-200/60"
+                          title={lang === 'gu' ? 'કાઢી નાખો' : 'Delete'}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>{t('btn_delete_entry')}</span>
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -436,12 +507,98 @@ export function Transactions({ onNavigate }) {
       {selectedExpense && (
         <ExpenseDetailsModal
           expense={selectedExpense}
+          categories={categories}
+          vendors={vendors}
           onClose={() => setSelectedExpense(null)}
           onRefresh={() => {
             fetchTransactions(pagination.page);
             handleOpenDetails(selectedExpense.id);
           }}
         />
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {expenseToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-2xl shadow-2xl border border-red-100 w-full max-w-md overflow-hidden">
+            <div className="p-5 bg-gradient-to-r from-red-600 to-rose-700 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-white/20 rounded-xl backdrop-blur-sm">
+                  <Trash2 className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base">{t('msg_confirm_delete_title')}</h3>
+                  <p className="text-xs text-red-100">{expenseToDelete.reference_number || `EXP #${expenseToDelete.id}`}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setExpenseToDelete(null)}
+                disabled={deleting}
+                className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition disabled:opacity-50"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="p-3.5 bg-red-50 rounded-xl border border-red-200/80 text-xs text-red-900 leading-relaxed">
+                <p className="font-semibold">{t('msg_confirm_delete_desc')}</p>
+                <div className="mt-2 pt-2 border-t border-red-200/60 text-slate-700 space-y-1">
+                  <div><strong>{lang === 'gu' ? 'તારીખ:' : 'Date:'}</strong> {formatDate(expenseToDelete.expense_date)}</div>
+                  <div><strong>{lang === 'gu' ? 'કેટેગરી:' : 'Category:'}</strong> {lang === 'gu' ? expenseToDelete.category_name_gu : expenseToDelete.category_name_en}</div>
+                  <div><strong>{lang === 'gu' ? 'રકમ:' : 'Amount:'}</strong> <span className="font-bold text-red-700">{formatINR(expenseToDelete.amount)}</span></div>
+                  {expenseToDelete.vendor_name && (
+                    <div><strong>{lang === 'gu' ? 'વેપારી:' : 'Vendor:'}</strong> {expenseToDelete.vendor_name}</div>
+                  )}
+                  {expenseToDelete.description && (
+                    <div><strong>{lang === 'gu' ? 'વિગત:' : 'Description:'}</strong> {expenseToDelete.description}</div>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t('lbl_delete_reason')}
+                </label>
+                <input
+                  type="text"
+                  value={deleteReason}
+                  onChange={(e) => setDeleteReason(e.target.value)}
+                  placeholder={lang === 'gu' ? 'દા.ત. ભૂલથી ખોટી એન્ટ્રી થઈ ગઈ હતી' : 'e.g. Accidental duplicate or mistaken entry'}
+                  className="w-full text-xs px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-500"
+                  disabled={deleting}
+                />
+              </div>
+
+              {deleteError && (
+                <div className="p-2.5 bg-red-100 text-red-800 rounded-xl text-xs flex items-center gap-1.5 font-medium">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                  <span>{deleteError}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setExpenseToDelete(null)}
+                  disabled={deleting}
+                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition disabled:opacity-50"
+                >
+                  {t('btn_cancel')}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDelete}
+                  disabled={deleting}
+                  className="px-4 py-2 text-xs font-bold bg-red-600 hover:bg-red-700 text-white rounded-xl transition inline-flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{deleting ? (lang === 'gu' ? 'કાઢી રહ્યું છે...' : 'Deleting...') : t('btn_delete_tx')}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -11,7 +11,7 @@
     "build:client": "vite build --config client/vite.config.js",
     "build": "npm run build:client",
     "start": "node server/index.js",
-    "test": "DB_PATH=data/test_jaishakti.sqlite node tests/setup.js && DB_PATH=data/test_jaishakti.sqlite node --test --test-concurrency=1 tests/*.test.js",
+    "test": "node tests/run-tests.js",
     "migrate": "node server/db/migrate.js",
     "seed": "node server/db/seed.js",
     "backup": "node server/scripts/backup-cli.js",
@@ -29,8 +29,11 @@
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.475.0",
     "multer": "^1.4.5-lts.1",
+    "pdf-parse": "^2.4.5",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "sharp": "^0.35.5",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.18",

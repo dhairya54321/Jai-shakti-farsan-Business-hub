@@ -4,6 +4,8 @@ import fs from 'fs';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
 import { uploadAttachment } from '../middleware/upload.js';
 import ExpenseService from '../services/expenseService.js';
+import { processBillFile } from '../services/ocrService.js';
+import { VendorService } from '../services/vendorService.js';
 import { getDatabase } from '../db/index.js';
 import config from '../config.js';
 
@@ -11,6 +13,98 @@ const router = express.Router();
 
 // All routes require valid authentication
 router.use(authenticateToken);
+
+// POST /api/expenses/scan-receipt - Scan receipt/bill with OCR & AI, decode items and quantities
+router.post('/scan-receipt', uploadAttachment.any(), async (req, res) => {
+  const uploadedFile = (req.files && req.files[0]) || req.file;
+  if (!uploadedFile) {
+    return res.status(400).json({ success: false, error: 'No receipt file uploaded. Please select a JPG, PNG, or PDF file.' });
+  }
+
+  try {
+    const db = getDatabase();
+    const settings = db.prepare('SELECT gemini_api_key FROM business_settings WHERE business_id = ?').get(req.user.business_id);
+    const geminiApiKey = req.body.geminiApiKey || req.headers['x-gemini-api-key'] || settings?.gemini_api_key || config.GEMINI_API_KEY || null;
+
+    const ocrResult = await processBillFile(uploadedFile.path, uploadedFile.mimetype, { geminiApiKey });
+
+    // Check potential duplicate / matching vendors
+    const duplicateCheck = VendorService.checkDuplicates(req.user.business_id, {
+      gstin: ocrResult.extracted.gstin,
+      name: ocrResult.extracted.vendorName,
+      phone: ocrResult.extracted.phone,
+      email: ocrResult.extracted.email
+    });
+
+    // Check if an expense with this vendor and invoice already exists
+    let matchedVendor = null;
+    if (duplicateCheck.matches && duplicateCheck.matches.length > 0) {
+      matchedVendor = duplicateCheck.matches[0].vendor;
+    } else if (ocrResult.extracted.vendorName) {
+      const vMatch = db.prepare(`
+        SELECT * FROM vendors 
+        WHERE business_id = ? AND (
+          UPPER(TRIM(name)) = UPPER(TRIM(?)) OR
+          UPPER(TRIM(?)) LIKE '%' || UPPER(TRIM(name)) || '%' OR
+          UPPER(TRIM(name)) LIKE '%' || UPPER(TRIM(?)) || '%'
+        )
+      `).get(req.user.business_id, ocrResult.extracted.vendorName, ocrResult.extracted.vendorName, ocrResult.extracted.vendorName);
+      if (vMatch) {
+        matchedVendor = vMatch;
+        duplicateCheck.matches.push({ vendor: vMatch, matchedFields: ['name'] });
+        duplicateCheck.isDuplicate = true;
+      }
+    }
+
+    if (matchedVendor) {
+      ocrResult.extracted.vendorId = matchedVendor.id;
+      ocrResult.extracted.vendorName = matchedVendor.name;
+      if (matchedVendor.category) {
+        ocrResult.extracted.vendorCategory = matchedVendor.category;
+      }
+    }
+
+    let duplicateExpense = null;
+    if (matchedVendor) {
+      const dupeCheck = ExpenseService.checkDuplicateExpense(req.user.business_id, {
+        vendor_id: matchedVendor.id,
+        invoice_number: ocrResult.extracted.invoiceNumber,
+        transaction_date: ocrResult.extracted.invoiceDate,
+        amount: ocrResult.extracted.totalAmount
+      });
+      if (dupeCheck.isDuplicate) {
+        duplicateExpense = dupeCheck.duplicate;
+      }
+    }
+
+    res.json({
+      success: true,
+      file: {
+        filename: uploadedFile.filename,
+        originalname: uploadedFile.originalname,
+        mimetype: uploadedFile.mimetype,
+        size: uploadedFile.size
+      },
+      ocr: ocrResult,
+      duplicates: duplicateCheck.matches,
+      isDuplicate: duplicateCheck.isDuplicate,
+      duplicateExpense: duplicateExpense,
+      isDuplicateExpense: !!duplicateExpense
+    });
+  } catch (err) {
+    console.error('Scan receipt error:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Receipt OCR processing failed: ' + err.message,
+      file: uploadedFile ? {
+        filename: uploadedFile.filename,
+        originalname: uploadedFile.originalname,
+        mimetype: uploadedFile.mimetype,
+        size: uploadedFile.size
+      } : null
+    });
+  }
+});
 
 // GET /api/expenses - List expenses with filters, search, pagination
 router.get('/', (req, res) => {
@@ -31,6 +125,14 @@ router.post('/', uploadAttachment.single('receipt'), (req, res) => {
     // If file was uploaded but save failed, clean up the orphaned file
     if (req.file && fs.existsSync(req.file.path)) {
       try { fs.unlinkSync(req.file.path); } catch (e) {}
+    }
+    if (err.code === 'DUPLICATE_EXPENSE') {
+      return res.status(409).json({
+        success: false,
+        code: 'DUPLICATE_EXPENSE',
+        error: err.message,
+        duplicate: err.duplicate
+      });
     }
     res.status(400).json({ success: false, error: err.message });
   }
@@ -97,6 +199,17 @@ router.post('/:id/void', requireRole(['owner', 'manager']), (req, res) => {
     const { reason } = req.body;
     const voided = ExpenseService.voidExpense(req.user, req.params.id, reason);
     res.json({ success: true, expense: voided });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE /api/expenses/:id - Delete an unwanted transaction (Owner/Manager only)
+router.delete('/:id', requireRole(['owner', 'manager']), (req, res) => {
+  try {
+    const reason = req.body?.reason || req.query?.reason || 'Deleted by user';
+    const result = ExpenseService.deleteExpense(req.user, req.params.id, reason);
+    res.json({ success: true, ...result });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
   }

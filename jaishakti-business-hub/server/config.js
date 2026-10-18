@@ -31,6 +31,7 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
 const BUSINESS_TIMEZONE = process.env.BUSINESS_TIMEZONE || 'Asia/Kolkata';
 const DEFAULT_CURRENCY = 'INR';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 
 // Safe directory initialization
 export function ensureDirectories() {
@@ -55,5 +56,6 @@ export default {
   JWT_EXPIRES_IN,
   BUSINESS_TIMEZONE,
   DEFAULT_CURRENCY,
+  GEMINI_API_KEY,
   ensureDirectories
 };
