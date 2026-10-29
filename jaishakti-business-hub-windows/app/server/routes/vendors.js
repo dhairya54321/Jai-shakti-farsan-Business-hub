@@ -6,6 +6,7 @@ import { uploadAttachment } from '../middleware/upload.js';
 import { VendorService } from '../services/vendorService.js';
 import { processBillFile } from '../services/ocrService.js';
 import ExpenseService from '../services/expenseService.js';
+import ManufacturingService from '../services/manufacturingService.js';
 import { getDatabase } from '../db/index.js';
 import config from '../config.js';
 
@@ -57,7 +58,10 @@ router.post('/scan-bill', uploadAttachment.any(), async (req, res) => {
     const settings = db.prepare('SELECT gemini_api_key FROM business_settings WHERE business_id = ?').get(req.user.business_id);
     const geminiApiKey = req.body.geminiApiKey || req.headers['x-gemini-api-key'] || settings?.gemini_api_key || config.GEMINI_API_KEY || null;
 
-    const ocrResult = await processBillFile(uploadedFile.path, uploadedFile.mimetype, { geminiApiKey });
+    // Fetch active known vendors for instant profile auto-fill & fast 4-field extraction
+    const knownVendors = db.prepare('SELECT id, name, category, phone, gstin, pan, address, city, contact_person FROM vendors WHERE business_id = ? AND is_active = 1').all(req.user.business_id);
+
+    const ocrResult = await processBillFile(uploadedFile.path, uploadedFile.mimetype, { geminiApiKey, knownVendors });
 
     // Check potential duplicate vendors matching extracted vendor name, GSTIN, or phone
     const duplicateCheck = VendorService.checkDuplicates(req.user.business_id, {
@@ -79,18 +83,17 @@ router.post('/scan-bill', uploadAttachment.any(), async (req, res) => {
       if (vMatch) matchedVendorId = vMatch.id;
     }
 
-    let duplicateExpense = null;
-    if (matchedVendorId) {
-      const dupeCheck = ExpenseService.checkDuplicateExpense(req.user.business_id, {
-        vendor_id: matchedVendorId,
-        invoice_number: ocrResult.extracted.invoiceNumber,
-        transaction_date: ocrResult.extracted.invoiceDate,
-        amount: ocrResult.extracted.totalAmount
-      });
-      if (dupeCheck.isDuplicate) {
-        duplicateExpense = dupeCheck.duplicate;
-      }
-    }
+    // Check if this bill/invoice is already in the record book (check bills, expenses, and image file hash)
+    const dupeCheck = ExpenseService.checkBillDuplicate(req.user.business_id, {
+      vendor_id: matchedVendorId,
+      vendor_name: ocrResult.extracted.vendorName,
+      gstin: ocrResult.extracted.gstin,
+      bill_number: ocrResult.extracted.invoiceNumber,
+      bill_date: ocrResult.extracted.invoiceDate,
+      total_amount: ocrResult.extracted.totalAmount,
+      file_path: uploadedFile.path,
+      stored_filename: uploadedFile.filename
+    });
 
     res.json({
       success: true,
@@ -103,8 +106,11 @@ router.post('/scan-bill', uploadAttachment.any(), async (req, res) => {
       ocr: ocrResult,
       duplicates: duplicateCheck.matches,
       isDuplicate: duplicateCheck.isDuplicate,
-      duplicateExpense: duplicateExpense,
-      isDuplicateExpense: !!duplicateExpense
+      duplicateExpense: dupeCheck.isDuplicate ? dupeCheck.duplicate : null,
+      isDuplicateExpense: dupeCheck.isDuplicate,
+      duplicateBill: dupeCheck.isDuplicate ? dupeCheck.duplicate : null,
+      isDuplicateBill: dupeCheck.isDuplicate,
+      duplicateMessage: dupeCheck.isDuplicate ? dupeCheck.message : null
     });
   } catch (err) {
     // Keep file in storage for user manual fallback
@@ -174,6 +180,23 @@ router.put('/:id', (req, res) => {
 });
 
 /**
+ * POST /api/vendors/bills/check-duplicate - Check if bill/invoice already exists in record book
+ */
+router.post('/bills/check-duplicate', (req, res) => {
+  try {
+    const dupeCheck = ExpenseService.checkBillDuplicate(req.user.business_id, req.body);
+    res.json({
+      success: true,
+      isDuplicate: dupeCheck.isDuplicate,
+      duplicate: dupeCheck.duplicate,
+      message: dupeCheck.message
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * POST /api/vendors/bills - Save reviewed bill and associate with vendor & file attachment
  */
 router.post('/bills', uploadAttachment.single('bill'), (req, res) => {
@@ -217,33 +240,106 @@ router.post('/bills', uploadAttachment.single('bill'), (req, res) => {
       }
     }
 
+    // STRICT RECORD BOOK CHECK: Block duplicate bill/invoice saving
+    if (!req.body.allow_duplicate) {
+      const dupeCheck = ExpenseService.checkBillDuplicate(req.user.business_id, {
+        vendor_id,
+        bill_number,
+        bill_date,
+        total_amount,
+        stored_filename: req.body.stored_filename,
+        file_path: file ? (file.path || path.join(config.UPLOADS_DIR, file.filename)) : null
+      });
+
+      if (dupeCheck.isDuplicate) {
+        return res.status(400).json({
+          success: false,
+          code: 'DUPLICATE_BILL_BLOCKED',
+          error: dupeCheck.message,
+          duplicate: dupeCheck.duplicate
+        });
+      }
+    }
+
+    // Parse inward stock items if provided
+    let inwardItems = [];
+    if (req.body.inward_stock_items) {
+      if (typeof req.body.inward_stock_items === 'string') {
+        try {
+          inwardItems = JSON.parse(req.body.inward_stock_items);
+        } catch (_) {
+          inwardItems = [];
+        }
+      } else if (Array.isArray(req.body.inward_stock_items)) {
+        inwardItems = req.body.inward_stock_items;
+      }
+    }
+
+    // Support creating new raw materials on the fly if needed
+    for (const item of inwardItems) {
+      if (item.is_new_material && item.new_material_data) {
+        try {
+          const newMat = ManufacturingService.createRawMaterial(req.user, item.new_material_data);
+          item.raw_material_id = newMat.id;
+        } catch (matErr) {
+          console.warn('Could not auto-create raw material on the fly:', matErr.message);
+        }
+      }
+    }
+
     let linkedExpenseId = null;
 
-    // If user requested creating a corresponding Daily Expense entry
+    // 1-WAY: If user requested creating a corresponding Daily Expense entry
     if (create_daily_expense === true || create_daily_expense === 'true') {
       try {
-        const createdExpense = ExpenseService.createExpense(
-          req.user,
-          {
-            category_id: expense_category_id,
-            amount: Number(total_amount),
-            payment_method: expense_payment_method || 'credit',
-            payment_status: Number(paid_amount) >= Number(total_amount) ? 'paid' : (Number(paid_amount) > 0 ? 'partially_paid' : 'unpaid'),
-            paid_amount: Number(paid_amount) || 0,
-            transaction_date: bill_date || new Date().toISOString().slice(0, 10),
-            vendor_id,
-            invoice_number: bill_number,
-            description: `Bill ${bill_number || ''} from vendor`.trim(),
-            notes: notes || null
-          },
-          file
-        );
-        linkedExpenseId = createdExpense.id;
+        let finalCategoryId = expense_category_id;
+        if (!finalCategoryId) {
+          const vendor = VendorService.getVendorById(req.user.business_id, vendor_id)?.vendor;
+          const vCat = (vendor?.category || '').toLowerCase();
+          if (vCat.includes('packaging')) finalCategoryId = 'cat_packaging_materials';
+          else if (vCat.includes('vegetable')) finalCategoryId = 'cat_vegetable_purchase';
+          else if (vCat.includes('finished') || vCat.includes('trade')) finalCategoryId = 'cat_finished_goods';
+          else finalCategoryId = 'cat_raw_materials';
+        }
+
+        // Check if an expense with the same invoice_number and vendor already exists
+        const db = getDatabase();
+        let existingExpense = null;
+        if (bill_number && String(bill_number).trim()) {
+          existingExpense = db.prepare(`
+            SELECT id FROM expenses
+            WHERE business_id = ? AND vendor_id = ? AND UPPER(TRIM(COALESCE(invoice_number, ''))) = UPPER(TRIM(?)) AND approval_status != 'voided'
+          `).get(req.user.business_id, vendor_id, bill_number);
+        }
+
+        if (existingExpense) {
+          linkedExpenseId = existingExpense.id;
+        } else {
+          const createdExpense = ExpenseService.createExpense(
+            req.user,
+            {
+              category_id: finalCategoryId,
+              amount: Number(total_amount),
+              payment_method: expense_payment_method || 'credit',
+              payment_status: Number(paid_amount) >= Number(total_amount) ? 'paid' : (Number(paid_amount) > 0 ? 'partially_paid' : 'unpaid'),
+              paid_amount: Number(paid_amount) || 0,
+              transaction_date: bill_date || new Date().toISOString().slice(0, 10),
+              vendor_id,
+              invoice_number: bill_number,
+              description: `Bill ${bill_number || ''} from vendor`.trim(),
+              notes: notes || null,
+              skip_vendor_bill_sync: true
+            },
+            file
+          );
+          linkedExpenseId = createdExpense.id;
+        }
       } catch (expErr) {
         console.warn('Could not auto-create linked expense:', expErr.message);
       }
     }
 
+    // 2-WAY: Save Vendor Bill & update vendor history
     const bill = VendorService.saveBill(
       req.user,
       {
@@ -270,7 +366,188 @@ router.post('/bills', uploadAttachment.single('bill'), (req, res) => {
       file
     );
 
-    res.status(201).json({ success: true, bill, linkedExpenseId });
+    // 3-WAY: Increment physical stock and log stock inward transaction
+    let stockUpdated = 0;
+    if (inwardItems.length > 0) {
+      try {
+        const inwardRes = ManufacturingService.inwardStockFromBill(req.user, bill.id, inwardItems);
+        stockUpdated = inwardRes?.count || 0;
+      } catch (stkErr) {
+        console.warn('Could not auto-increment stock from bill:', stkErr.message);
+      }
+    }
+
+    res.status(201).json({ success: true, bill, linkedExpenseId, stockUpdated });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/vendors/bills/:id/create-expense - Convert / Link an unlinked vendor bill into Daily Expenses
+ */
+router.post('/bills/:id/create-expense', (req, res) => {
+  try {
+    const db = getDatabase();
+    const businessId = req.user.business_id;
+    const bill = db.prepare(`SELECT * FROM vendor_bills WHERE id = ? AND business_id = ?`).get(req.params.id, businessId);
+    if (!bill) {
+      return res.status(404).json({ success: false, error: 'Bill not found.' });
+    }
+
+    // Check if already linked
+    if (bill.expense_id) {
+      const existing = db.prepare(`SELECT * FROM expenses WHERE id = ? AND business_id = ?`).get(bill.expense_id, businessId);
+      if (existing) {
+        return res.json({ success: true, expense: existing, message: 'Bill is already linked to an expense.' });
+      }
+    }
+
+    // Check if an expense with the same invoice_number and vendor already exists (e.g. entered manually)
+    if (bill.bill_number) {
+      const matched = db.prepare(`
+        SELECT * FROM expenses
+        WHERE business_id = ? AND vendor_id = ? AND invoice_number = ? AND approval_status != 'voided'
+      `).get(businessId, bill.vendor_id, bill.bill_number);
+
+      if (matched) {
+        db.prepare(`UPDATE vendor_bills SET expense_id = ?, updated_at = ? WHERE id = ?`)
+          .run(matched.id, new Date().toISOString(), bill.id);
+        return res.json({ success: true, expense: matched, message: 'Linked to existing expense transaction.' });
+      }
+    }
+
+    // Resolve category from vendor or fallback
+    const vendor = db.prepare(`SELECT * FROM vendors WHERE id = ? AND business_id = ?`).get(bill.vendor_id, businessId);
+    let categoryId = req.body.category_id;
+    if (!categoryId) {
+      const vCat = (vendor?.category || '').toLowerCase();
+      if (vCat.includes('packag')) categoryId = 'cat_packaging_materials';
+      else if (vCat.includes('finish')) categoryId = 'cat_finished_goods';
+      else if (vCat.includes('vegetab') || vCat.includes('potato')) categoryId = 'cat_vegetable_purchase';
+      else categoryId = 'cat_raw_materials';
+    }
+
+    // Check for existing bill attachment to link to expense
+    const attachment = db.prepare(`
+      SELECT * FROM bill_attachments WHERE bill_id = ? AND business_id = ?
+    `).get(bill.id, businessId);
+
+    let file = null;
+    if (attachment) {
+      const filePath = path.join(config.UPLOADS_DIR, attachment.storage_key);
+      if (fs.existsSync(filePath)) {
+        file = {
+          filename: attachment.storage_key,
+          originalname: attachment.original_filename,
+          mimetype: attachment.content_type,
+          size: attachment.file_size_bytes
+        };
+      }
+    }
+
+    const createdExpense = ExpenseService.createExpense(
+      req.user,
+      {
+        category_id: categoryId,
+        amount: Number(bill.total_amount),
+        payment_method: req.body.payment_method || 'credit',
+        payment_status: Number(bill.paid_amount) >= Number(bill.total_amount) && Number(bill.total_amount) > 0
+          ? 'paid'
+          : (Number(bill.paid_amount) > 0 ? 'partially_paid' : 'unpaid'),
+        paid_amount: Number(bill.paid_amount) || 0,
+        transaction_date: bill.bill_date || new Date().toISOString().slice(0, 10),
+        vendor_id: bill.vendor_id,
+        invoice_number: bill.bill_number,
+        description: `Bill ${bill.bill_number || ''} from ${vendor?.name || 'vendor'}`.trim(),
+        notes: bill.notes || null,
+        allow_duplicate: true
+      },
+      file
+    );
+
+    // Update vendor_bills with the new expense_id
+    db.prepare(`UPDATE vendor_bills SET expense_id = ?, updated_at = ? WHERE id = ?`)
+      .run(createdExpense.id, new Date().toISOString(), bill.id);
+
+    res.status(201).json({ success: true, expense: createdExpense });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * PUT /api/vendors/bills/:id/payment-status - Update payment status of a vendor bill & sync linked expense
+ */
+router.put('/bills/:id/payment-status', (req, res) => {
+  try {
+    const db = getDatabase();
+    const businessId = req.user.business_id;
+    const { payment_status, payment_method, paid_amount } = req.body;
+
+    if (!['paid', 'unpaid', 'partially_paid'].includes(payment_status)) {
+      return res.status(400).json({ success: false, error: 'Invalid payment status.' });
+    }
+
+    const bill = db.prepare(`SELECT * FROM vendor_bills WHERE id = ? AND business_id = ?`).get(req.params.id, businessId);
+    if (!bill) {
+      return res.status(404).json({ success: false, error: 'Bill not found.' });
+    }
+
+    const now = new Date().toISOString();
+    let effectivePaidAmount = 0;
+    if (payment_status === 'paid') {
+      effectivePaidAmount = bill.total_amount;
+    } else if (payment_status === 'partially_paid') {
+      effectivePaidAmount = Number(paid_amount) || 0;
+    }
+
+    db.transaction(() => {
+      // 1. Update bill
+      db.prepare(`
+        UPDATE vendor_bills SET payment_status = ?, paid_amount = ?, updated_at = ? WHERE id = ?
+      `).run(payment_status, effectivePaidAmount, now, bill.id);
+
+      // 2. If linked to an expense, sync the expense
+      if (bill.expense_id) {
+        ExpenseService.updateExpense(
+          req.user,
+          bill.expense_id,
+          {
+            payment_status,
+            payment_method: payment_method || 'cash',
+            paid_amount: effectivePaidAmount
+          },
+          'Payment status updated from vendor bills profile'
+        );
+
+        if (payment_status === 'paid' && effectivePaidAmount > 0) {
+          const existingPay = db.prepare('SELECT id FROM expense_payments WHERE expense_id = ?').get(bill.expense_id);
+          if (!existingPay) {
+            db.prepare(`
+              INSERT INTO expense_payments (
+                id, business_id, expense_id, payment_date, amount,
+                payment_method, reference_number, notes, recorded_by, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+              'pay_' + crypto.randomUUID(),
+              businessId,
+              bill.expense_id,
+              bill.bill_date || now.slice(0, 10),
+              effectivePaidAmount,
+              payment_method || 'cash',
+              bill.bill_number ? `Bill #${bill.bill_number}` : null,
+              'Payment recorded from Vendor Bill profile',
+              req.user.id,
+              now,
+              now
+            );
+          }
+        }
+      }
+    })();
+
+    res.json({ success: true, message: 'Payment status updated successfully.' });
   } catch (err) {
     res.status(400).json({ success: false, error: err.message });
   }

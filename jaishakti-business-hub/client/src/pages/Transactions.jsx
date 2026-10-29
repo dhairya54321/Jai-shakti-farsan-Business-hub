@@ -18,8 +18,55 @@ import {
   ArrowUpDown,
   RefreshCw,
   Plus,
-  Trash2
+  Trash2,
+  Users,
+  SlidersHorizontal,
+  LayoutGrid,
+  ListCollapse,
+  Layers,
+  RotateCcw,
+  Check,
+  X
 } from 'lucide-react';
+
+export const AVAILABLE_COLUMNS = [
+  { id: 'date', key: 'col_date', default: true },
+  { id: 'tx_no', key: 'col_tx_no', default: true },
+  { id: 'category', key: 'col_category', default: true },
+  { id: 'description', key: 'col_description', default: true },
+  { id: 'vendor', key: 'col_vendor', default: true },
+  { id: 'amount', key: 'col_amount', default: true },
+  { id: 'paid', key: 'col_paid', default: true },
+  { id: 'balance', key: 'col_balance', default: false },
+  { id: 'payment_status', key: 'col_payment_status', default: true },
+  { id: 'payment_method', key: 'col_payment_method', default: false },
+  { id: 'approval_status', key: 'col_approval_status', default: false },
+  { id: 'invoice_no', key: 'col_invoice_no', default: false },
+  { id: 'reference_no', key: 'col_reference_no', default: false },
+  { id: 'actions', key: 'col_actions', default: true, required: true }
+];
+
+export const PRESETS = {
+  standard: ['date', 'tx_no', 'category', 'description', 'vendor', 'amount', 'paid', 'payment_status', 'actions'],
+  compact: ['date', 'category', 'vendor', 'amount', 'payment_status', 'actions'],
+  full: AVAILABLE_COLUMNS.map(c => c.id)
+};
+
+const COLUMN_STORAGE_KEY = 'jaishakti_tx_visible_columns_v2';
+
+const getInitialVisibleColumns = () => {
+  try {
+    const saved = localStorage.getItem(COLUMN_STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        if (!parsed.includes('actions')) parsed.push('actions');
+        return parsed;
+      }
+    }
+  } catch (e) {}
+  return PRESETS.standard;
+};
 
 export function Transactions({ onNavigate }) {
   const { lang, t, formatINR, formatDate } = useLanguage();
@@ -30,6 +77,31 @@ export function Transactions({ onNavigate }) {
   const [categories, setCategories] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Customizable Columns State
+  const [visibleColumns, setVisibleColumns] = useState(getInitialVisibleColumns);
+  const [showColumnModal, setShowColumnModal] = useState(false);
+
+  const toggleColumn = (colId) => {
+    if (colId === 'actions') return;
+    setVisibleColumns((prev) => {
+      const next = prev.includes(colId) ? prev.filter((id) => id !== colId) : [...prev, colId];
+      try {
+        localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
+  };
+
+  const applyPreset = (presetKey) => {
+    const next = PRESETS[presetKey] || PRESETS.standard;
+    setVisibleColumns(next);
+    try {
+      localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(next));
+    } catch (e) {}
+  };
+
+  const isColVisible = (colId) => visibleColumns.includes(colId);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -196,13 +268,29 @@ export function Transactions({ onNavigate }) {
           </p>
         </div>
 
-        <button
-          onClick={() => onNavigate('add_expense')}
-          className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-sm transition self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4" />
-          <span>{t('btn_quick_add')}</span>
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          {/* Customizable Columns Button */}
+          <button
+            type="button"
+            onClick={() => setShowColumnModal(true)}
+            className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs border border-slate-200/90 shadow-xs transition"
+            title={lang === 'gu' ? 'કોષ્ટકની કૉલમ પસંદ કરો' : 'Customize Table Columns'}
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5 text-amber-600" />
+            <span>{t('btn_customize_columns')}</span>
+            <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-extrabold">
+              {visibleColumns.length}/{AVAILABLE_COLUMNS.length}
+            </span>
+          </button>
+
+          <button
+            onClick={() => onNavigate('add_expense')}
+            className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white font-bold text-xs shadow-md shadow-amber-500/20 transition"
+          >
+            <Plus className="w-4 h-4" />
+            <span>{t('btn_quick_add')}</span>
+          </button>
+        </div>
       </div>
 
       {/* Action Notification */}
@@ -332,13 +420,25 @@ export function Transactions({ onNavigate }) {
             />
           </div>
 
-          <button
-            type="button"
-            onClick={handleResetFilters}
-            className="text-amber-800 hover:underline font-semibold"
-          >
-            {t('btn_reset')}
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setShowColumnModal(true)}
+              className="text-slate-600 hover:text-amber-800 font-semibold flex items-center gap-1.5 transition"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5 text-amber-600" />
+              <span>{t('btn_customize_columns')}</span>
+              <span className="text-[10px] text-slate-400">({visibleColumns.length} visible)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleResetFilters}
+              className="text-amber-800 hover:underline font-semibold"
+            >
+              {t('btn_reset')}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -358,120 +458,208 @@ export function Transactions({ onNavigate }) {
             <table className="w-full text-left text-xs text-slate-600">
               <thead className="bg-slate-50 text-slate-700 uppercase font-semibold border-b border-slate-100">
                 <tr>
-                  <th className="px-4 py-3">{t('th_date')}</th>
-                  <th className="px-4 py-3">{t('th_tx_no')}</th>
-                  <th className="px-4 py-3">{t('th_category')}</th>
-                  <th className="px-4 py-3">{t('th_description')}</th>
-                  <th className="px-4 py-3">{t('th_vendor')}</th>
-                  <th className="px-4 py-3">{t('th_amount')}</th>
-                  <th className="px-4 py-3">{t('th_paid')}</th>
-                  <th className="px-4 py-3">{t('th_status')}</th>
-                  <th className="px-4 py-3 text-right">{t('th_actions')}</th>
+                  {isColVisible('date') && <th className="px-4 py-3 whitespace-nowrap">{t('col_date')}</th>}
+                  {isColVisible('tx_no') && <th className="px-4 py-3 whitespace-nowrap">{t('col_tx_no')}</th>}
+                  {isColVisible('category') && <th className="px-4 py-3 whitespace-nowrap">{t('col_category')}</th>}
+                  {isColVisible('description') && <th className="px-4 py-3 min-w-[160px]">{t('col_description')}</th>}
+                  {isColVisible('vendor') && <th className="px-4 py-3 whitespace-nowrap">{t('col_vendor')}</th>}
+                  {isColVisible('amount') && <th className="px-4 py-3 whitespace-nowrap">{t('col_amount')}</th>}
+                  {isColVisible('paid') && <th className="px-4 py-3 whitespace-nowrap">{t('col_paid')}</th>}
+                  {isColVisible('balance') && <th className="px-4 py-3 whitespace-nowrap">{t('col_balance')}</th>}
+                  {isColVisible('payment_status') && <th className="px-4 py-3 whitespace-nowrap">{t('col_payment_status')}</th>}
+                  {isColVisible('payment_method') && <th className="px-4 py-3 whitespace-nowrap">{t('col_payment_method')}</th>}
+                  {isColVisible('approval_status') && <th className="px-4 py-3 whitespace-nowrap">{t('col_approval_status')}</th>}
+                  {isColVisible('invoice_no') && <th className="px-4 py-3 whitespace-nowrap">{t('col_invoice_no')}</th>}
+                  {isColVisible('reference_no') && <th className="px-4 py-3 whitespace-nowrap">{t('col_reference_no')}</th>}
+                  {isColVisible('actions') && <th className="px-4 py-3 text-right whitespace-nowrap">{t('col_actions')}</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {expenses.map((tx) => (
-                  <tr key={tx.id} className="hover:bg-slate-50 transition">
-                    <td className="px-4 py-3 whitespace-nowrap font-medium text-slate-900">
-                      {formatDate(tx.transaction_date)}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap font-mono text-slate-500">
-                      {tx.transaction_number}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap font-semibold text-slate-800">
-                      {lang === 'gu' ? tx.category_name_gu : tx.category_name_en}
-                    </td>
-                    <td className="px-4 py-3 max-w-[180px] truncate text-slate-500">
-                      {tx.description || '—'}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap text-slate-600">
-                      {tx.vendor_name || '—'}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap font-black text-slate-900">
-                      {formatINR(tx.amount)}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap font-semibold text-emerald-700">
-                      {formatINR(tx.total_paid || 0)}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap">
-                      {tx.approval_status === 'voided' ? (
-                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700 border border-slate-300">
-                          {t('as_voided')}
-                        </span>
-                      ) : tx.approval_status === 'rejected' ? (
-                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-800 border border-red-200">
-                          {t('as_rejected')}
-                        </span>
-                      ) : (
-                        <div className="flex flex-col gap-0.5 items-start">
-                          <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-1.5 ${
-                            tx.payment_status === 'paid'
-                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200/80'
-                              : tx.payment_status === 'partially_paid'
-                              ? 'bg-amber-100 text-amber-800 border border-amber-200/80'
-                              : 'bg-rose-100 text-rose-800 border border-rose-200/80'
-                          }`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${
-                              tx.payment_status === 'paid' ? 'bg-emerald-600' :
-                              tx.payment_status === 'partially_paid' ? 'bg-amber-600' : 'bg-rose-600'
-                            }`} />
-                            {tx.payment_status === 'paid'
-                              ? (lang === 'gu' ? 'ચૂકવેલ' : 'Paid')
-                              : tx.payment_status === 'partially_paid'
-                              ? (lang === 'gu' ? 'અંશતઃ ચૂકવેલ' : 'Partially Paid')
-                              : (lang === 'gu' ? 'બાકી ચૂકવણી' : 'Payment Pending')}
+                {expenses.map((tx) => {
+                  const dueBalance = Math.max(0, (Number(tx.amount) || 0) - (Number(tx.total_paid) || 0));
+                  return (
+                    <tr key={tx.id} className="hover:bg-slate-50/80 transition">
+                      {isColVisible('date') && (
+                        <td className="px-4 py-3 whitespace-nowrap font-medium text-slate-900">
+                          {formatDate(tx.transaction_date)}
+                        </td>
+                      )}
+                      {isColVisible('tx_no') && (
+                        <td className="px-4 py-3 whitespace-nowrap font-mono text-slate-500">
+                          {tx.transaction_number}
+                        </td>
+                      )}
+                      {isColVisible('category') && (
+                        <td className="px-4 py-3 whitespace-nowrap font-semibold text-slate-800">
+                          {lang === 'gu' ? tx.category_name_gu : tx.category_name_en}
+                        </td>
+                      )}
+                      {isColVisible('description') && (
+                        <td className="px-4 py-3 max-w-[220px] truncate text-slate-600" title={tx.description || ''}>
+                          {tx.description || '—'}
+                        </td>
+                      )}
+                      {isColVisible('vendor') && (
+                        <td className="px-4 py-3 whitespace-nowrap text-slate-600">
+                          {tx.worker_name ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-900 border border-amber-300 shadow-xs">
+                              <Users className="w-3 h-3 text-amber-600" />
+                              <span>{tx.worker_name}</span>
+                            </span>
+                          ) : (
+                            tx.vendor_name || '—'
+                          )}
+                        </td>
+                      )}
+                      {isColVisible('amount') && (
+                        <td className="px-4 py-3 whitespace-nowrap font-black text-slate-900">
+                          {formatINR(tx.amount)}
+                        </td>
+                      )}
+                      {isColVisible('paid') && (
+                        <td className="px-4 py-3 whitespace-nowrap font-semibold text-emerald-700">
+                          {formatINR(tx.total_paid || 0)}
+                        </td>
+                      )}
+                      {isColVisible('balance') && (
+                        <td className="px-4 py-3 whitespace-nowrap font-semibold">
+                          {dueBalance > 0 ? (
+                            <span className="text-rose-600 font-bold bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                              {formatINR(dueBalance)}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">₹0</span>
+                          )}
+                        </td>
+                      )}
+                      {isColVisible('payment_status') && (
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          {tx.approval_status === 'voided' ? (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700 border border-slate-300">
+                              {t('as_voided')}
+                            </span>
+                          ) : tx.approval_status === 'rejected' ? (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-800 border border-red-200">
+                              {t('as_rejected')}
+                            </span>
+                          ) : (
+                            <div className="flex flex-col gap-0.5 items-start">
+                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-1.5 ${
+                                tx.payment_status === 'paid'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200/80'
+                                  : tx.payment_status === 'partially_paid'
+                                  ? 'bg-amber-100 text-amber-800 border border-amber-200/80'
+                                  : 'bg-rose-100 text-rose-800 border border-rose-200/80'
+                              }`}>
+                                <span className={`w-1.5 h-1.5 rounded-full ${
+                                  tx.payment_status === 'paid' ? 'bg-emerald-600' :
+                                  tx.payment_status === 'partially_paid' ? 'bg-amber-600' : 'bg-rose-600'
+                                }`} />
+                                {tx.payment_status === 'paid'
+                                  ? (lang === 'gu' ? 'ચૂકવેલ' : 'Paid')
+                                  : tx.payment_status === 'partially_paid'
+                                  ? (lang === 'gu' ? 'અંશતઃ ચૂકવેલ' : 'Partially Paid')
+                                  : (lang === 'gu' ? 'બાકી ચૂકવણી' : 'Payment Pending')}
+                              </span>
+                              {tx.approval_status === 'pending_approval' && (
+                                <span className="text-[9px] text-amber-700 font-semibold pl-1">
+                                  • {t('as_pending_approval')}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      )}
+                      {isColVisible('payment_method') && (
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span className="px-2.5 py-0.5 rounded-lg text-[11px] font-semibold bg-slate-100 text-slate-700 uppercase border border-slate-200">
+                            {t(`pm_${tx.payment_method}`) || tx.payment_method || '—'}
                           </span>
-                          {tx.approval_status === 'pending_approval' && (
-                            <span className="text-[9px] text-amber-700 font-semibold pl-1">
-                              • {t('as_pending_approval')}
+                        </td>
+                      )}
+                      {isColVisible('approval_status') && (
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          {tx.approval_status === 'approved' ? (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              {t('as_approved')}
+                            </span>
+                          ) : tx.approval_status === 'pending_approval' ? (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                              {t('as_pending_approval')}
+                            </span>
+                          ) : tx.approval_status === 'rejected' ? (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-800 border border-red-200">
+                              {t('as_rejected')}
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700 border border-slate-300">
+                              {t('as_voided')}
                             </span>
                           )}
-                        </div>
+                        </td>
                       )}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap text-right space-x-1">
-                      {isOwnerOrManager && tx.approval_status === 'pending_approval' && (
-                        <>
+                      {isColVisible('invoice_no') && (
+                        <td className="px-4 py-3 whitespace-nowrap font-mono text-[11px] text-slate-600">
+                          {tx.invoice_number ? (
+                            <span className="bg-slate-100 px-2 py-0.5 rounded border border-slate-200 font-semibold text-slate-800">
+                              #{tx.invoice_number}
+                            </span>
+                          ) : (
+                            '—'
+                          )}
+                        </td>
+                      )}
+                      {isColVisible('reference_no') && (
+                        <td className="px-4 py-3 whitespace-nowrap font-mono text-[11px] text-slate-600">
+                          {tx.reference_number || '—'}
+                        </td>
+                      )}
+                      {isColVisible('actions') && (
+                        <td className="px-4 py-3 whitespace-nowrap text-right space-x-1">
+                          {isOwnerOrManager && tx.approval_status === 'pending_approval' && (
+                            <>
+                              <button
+                                onClick={() => handleApprove(tx.id)}
+                                className="p-1 rounded text-emerald-600 hover:bg-emerald-50"
+                                title={t('btn_approve')}
+                              >
+                                <CheckCircle className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => handleReject(tx.id)}
+                                className="p-1 rounded text-red-600 hover:bg-red-50"
+                                title={t('btn_reject')}
+                              >
+                                <XCircle className="w-4 h-4" />
+                              </button>
+                            </>
+                          )}
                           <button
-                            onClick={() => handleApprove(tx.id)}
-                            className="p-1 rounded text-emerald-600 hover:bg-emerald-50"
-                            title={t('btn_approve')}
+                            onClick={() => handleOpenDetails(tx.id)}
+                            className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg font-bold text-[11px] inline-flex items-center gap-1 transition"
                           >
-                            <CheckCircle className="w-4 h-4" />
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>{t('btn_view_details')}</span>
                           </button>
-                          <button
-                            onClick={() => handleReject(tx.id)}
-                            className="p-1 rounded text-red-600 hover:bg-red-50"
-                            title={t('btn_reject')}
-                          >
-                            <XCircle className="w-4 h-4" />
-                          </button>
-                        </>
+                          {isOwnerOrManager && (
+                            <button
+                              onClick={() => {
+                                setExpenseToDelete(tx);
+                                setDeleteReason('');
+                                setDeleteError('');
+                              }}
+                              className="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 hover:text-red-800 rounded-lg font-bold text-[11px] inline-flex items-center gap-1 transition border border-red-200/60"
+                              title={lang === 'gu' ? 'કાઢી નાખો' : 'Delete'}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>{t('btn_delete_entry')}</span>
+                            </button>
+                          )}
+                        </td>
                       )}
-                      <button
-                        onClick={() => handleOpenDetails(tx.id)}
-                        className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg font-bold text-[11px] inline-flex items-center gap-1 transition"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>{t('btn_view_details')}</span>
-                      </button>
-                      {isOwnerOrManager && (
-                        <button
-                          onClick={() => {
-                            setExpenseToDelete(tx);
-                            setDeleteReason('');
-                            setDeleteError('');
-                          }}
-                          className="px-2.5 py-1 bg-red-50 hover:bg-red-100 text-red-700 hover:text-red-800 rounded-lg font-bold text-[11px] inline-flex items-center gap-1 transition border border-red-200/60"
-                          title={lang === 'gu' ? 'કાઢી નાખો' : 'Delete'}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>{t('btn_delete_entry')}</span>
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -596,6 +784,130 @@ export function Transactions({ onNavigate }) {
                   <span>{deleting ? (lang === 'gu' ? 'કાઢી રહ્યું છે...' : 'Deleting...') : t('btn_delete_tx')}</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Column Customization Modal */}
+      {showColumnModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl border border-slate-100 animate-scale-in">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center shadow-xs">
+                  <SlidersHorizontal className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-base">
+                    {t('lbl_customize_columns')}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {t('lbl_visible_columns_count')
+                      .replace('{count}', visibleColumns.length)
+                      .replace('{total}', AVAILABLE_COLUMNS.length)}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowColumnModal(false)}
+                className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* View Presets */}
+            <div className="space-y-1.5">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                {lang === 'gu' ? 'ઝડપી પ્રીસેટ્સ (Presets)' : 'Quick View Presets'}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => applyPreset('standard')}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-200 bg-slate-50 hover:bg-amber-50 hover:border-amber-300 text-slate-700 hover:text-amber-900 transition flex items-center gap-1.5"
+                >
+                  <LayoutGrid className="w-3.5 h-3.5 text-amber-600" />
+                  <span>{t('btn_preset_standard')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyPreset('compact')}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-200 bg-slate-50 hover:bg-amber-50 hover:border-amber-300 text-slate-700 hover:text-amber-900 transition flex items-center gap-1.5"
+                >
+                  <ListCollapse className="w-3.5 h-3.5 text-amber-600" />
+                  <span>{t('btn_preset_compact')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyPreset('full')}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-200 bg-slate-50 hover:bg-amber-50 hover:border-amber-300 text-slate-700 hover:text-amber-900 transition flex items-center gap-1.5"
+                >
+                  <Layers className="w-3.5 h-3.5 text-amber-600" />
+                  <span>{t('btn_preset_full')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyPreset('standard')}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-200 text-slate-500 hover:bg-slate-100 transition flex items-center gap-1"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>{t('btn_reset_columns')}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Column Checkboxes List (Grid of 2 columns) */}
+            <div className="max-h-72 overflow-y-auto pr-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {AVAILABLE_COLUMNS.map((col) => {
+                  const isChecked = visibleColumns.includes(col.id);
+                  const isRequired = col.required;
+                  return (
+                    <div
+                      key={col.id}
+                      onClick={() => !isRequired && toggleColumn(col.id)}
+                      className={`flex items-center justify-between p-2.5 rounded-xl border text-xs font-semibold cursor-pointer transition select-none ${
+                        isChecked
+                          ? 'border-amber-400 bg-amber-50/70 text-amber-950 shadow-xs'
+                          : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
+                      } ${isRequired ? 'opacity-85 cursor-default' : ''}`}
+                    >
+                      <div className="flex items-center gap-2.5 truncate">
+                        <div className={`w-4 h-4 rounded-md flex items-center justify-center border transition ${
+                          isChecked
+                            ? 'bg-amber-500 border-amber-600 text-white'
+                            : 'border-slate-300 bg-white'
+                        }`}>
+                          {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
+                        </div>
+                        <span className="truncate">{t(col.key)}</span>
+                      </div>
+                      {isRequired && (
+                        <span className="text-[10px] text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded font-bold">
+                          {lang === 'gu' ? 'જરૂરી' : 'Locked'}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+              <span className="text-xs text-slate-400 font-medium">
+                {lang === 'gu' ? 'સેટિંગ્સ આપોઆપ સેવ થાય છે' : 'Changes saved automatically'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowColumnModal(false)}
+                className="px-5 py-2.5 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-md shadow-amber-500/20 transition"
+              >
+                {lang === 'gu' ? 'પૂર્ણ (Done)' : 'Done & Apply'}
+              </button>
             </div>
           </div>
         </div>

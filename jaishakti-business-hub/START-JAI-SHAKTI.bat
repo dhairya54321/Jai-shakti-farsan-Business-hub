@@ -10,6 +10,7 @@ echo ==========================================================
 echo.
 
 :: 1. Check Node.js runtime availability
+if exist "%LOCALAPPDATA%\Programs\nodejs" set "PATH=%LOCALAPPDATA%\Programs\nodejs;%PATH%"
 where node >nul 2>nul
 if %errorlevel% neq 0 (
     echo [ERROR] Node.js is not detected on this Windows PC.
@@ -36,7 +37,7 @@ if not exist "node_modules" (
     echo [NOTICE] First-time setup: Installing dependencies...
     call SETUP-WINDOWS.bat
 ) else (
-    node -e "require('better-sqlite3')" >nul 2>&1
+    node -e "const d = new (require('better-sqlite3'))()" >nul 2>&1
     if !errorlevel! neq 0 (
         echo [NOTICE] Adapting native dependencies for Windows architecture...
         call SETUP-WINDOWS.bat
@@ -55,7 +56,7 @@ if %errorlevel% equ 0 (
     echo [NOTICE] Jai Shakti is already running on port 3000!
     echo Opening browser to http://localhost:3000...
     start http://localhost:3000
-    timeout /t 3 >nul
+    ping 127.0.0.1 -n 4 >nul 2>&1
     exit /b 0
 )
 
@@ -73,7 +74,7 @@ set "NODE_ENV=production"
 start "Jai Shakti Server" /min cmd /c "node server\index.js > logs\server.log 2>&1"
 
 :: Wait 2 seconds for server to bind port
-timeout /t 2 >nul
+ping 127.0.0.1 -n 3 >nul 2>&1
 
 :: Open browser
 echo Opening Jai Shakti Business Hub in browser...
@@ -86,4 +87,4 @@ echo   To stop the server, run: STOP-JAI-SHAKTI.bat
 echo   To create a backup, run: BACKUP-DATA.bat
 echo ==========================================================
 echo.
-timeout /t 4 >nul
+ping 127.0.0.1 -n 5 >nul 2>&1

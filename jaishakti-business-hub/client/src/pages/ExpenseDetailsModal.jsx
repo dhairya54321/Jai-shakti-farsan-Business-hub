@@ -7,6 +7,7 @@ import {
   Calendar,
   Receipt,
   User,
+  Users,
   CheckCircle,
   XCircle,
   AlertTriangle,
@@ -19,7 +20,12 @@ import {
   Trash2,
   Edit,
   Check,
-  AlertCircle
+  AlertCircle,
+  Eye,
+  ZoomIn,
+  ZoomOut,
+  RotateCw,
+  Maximize2
 } from 'lucide-react';
 
 export function ExpenseDetailsModal({
@@ -36,10 +42,16 @@ export function ExpenseDetailsModal({
   const [catList, setCatList] = useState(categories);
   const [venList, setVenList] = useState(vendors);
 
+  // Lightbox Viewer State
+  const [lightboxUrl, setLightboxUrl] = useState(null);
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [rotation, setRotation] = useState(0);
+
   // Edit Mode State
   const [isEditing, setIsEditing] = useState(false);
   const [editCategoryId, setEditCategoryId] = useState('');
   const [editAmount, setEditAmount] = useState('');
+  const [editPaymentMethod, setEditPaymentMethod] = useState('cash');
   const [editVendorId, setEditVendorId] = useState('');
   const [editTransactionDate, setEditTransactionDate] = useState('');
   const [editInvoiceNumber, setEditInvoiceNumber] = useState('');
@@ -53,12 +65,22 @@ export function ExpenseDetailsModal({
   // Payment State
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('cash');
-  const [paymentRef, setPaymentRef] = useState('');
+  const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [submittingPayment, setSubmittingPayment] = useState(false);
   const [paymentError, setPaymentError] = useState('');
 
+  // Payment Inline Edit & Delete State
+  const [editingPaymentId, setEditingPaymentId] = useState(null);
+  const [editPayAmount, setEditPayAmount] = useState('');
+  const [editPayMethod, setEditPayMethod] = useState('cash');
+  const [editPayDate, setEditPayDate] = useState('');
+  const [savingPaymentAction, setSavingPaymentAction] = useState(false);
+  const [paymentActionError, setPaymentActionError] = useState('');
+
   useEffect(() => {
     setCurrentExpense(expense);
+    setPaymentDate(new Date().toISOString().slice(0, 10));
+    setPaymentAmount('');
   }, [expense]);
 
   useEffect(() => {
@@ -88,6 +110,8 @@ export function ExpenseDetailsModal({
   const handleStartEditing = () => {
     setEditCategoryId(currentExpense.category_id || '');
     setEditAmount(currentExpense.amount ? String(currentExpense.amount) : '');
+    const initialMethod = currentExpense.payments?.[0]?.payment_method || currentExpense.payment_method || 'cash';
+    setEditPaymentMethod(initialMethod);
     setEditVendorId(currentExpense.vendor_id || '');
     setEditTransactionDate(
       currentExpense.transaction_date ? currentExpense.transaction_date.slice(0, 10) : ''
@@ -114,11 +138,11 @@ export function ExpenseDetailsModal({
       return;
     }
     const totalPaid = currentExpense.total_paid || 0;
-    if (amtNum < totalPaid) {
+    if (currentExpense.payments && currentExpense.payments.length > 1 && amtNum < totalPaid) {
       setEditError(
         lang === 'gu'
-          ? `નવી રકમ ₹${amtNum} એ પહેલેથી ચૂકવાયેલ ₹${totalPaid} કરતાં ઓછી હોઈ શકે નહીં.`
-          : `New amount of ₹${amtNum} cannot be less than already paid amount of ₹${totalPaid}.`
+          ? `નવી રકમ ₹${amtNum} એ પહેલેથી ચૂકવાયેલ ₹${totalPaid} કરતાં ઓછી હોઈ શકે નહીં. કૃપા કરીને નીચે ચૂકવણી હિસ્ટ્રીમાંથી રકમ સુધારો.`
+          : `New amount of ₹${amtNum} cannot be less than already paid amount of ₹${totalPaid}. Please adjust payment history first.`
       );
       return;
     }
@@ -139,6 +163,8 @@ export function ExpenseDetailsModal({
           invoice_number: editInvoiceNumber.trim() || null,
           description: editDescription.trim() || null,
           notes: editNotes.trim() || null,
+          payment_method: editPaymentMethod,
+          payment_amount: (currentExpense.payments?.length === 1 && currentExpense.balance_due === 0) ? amtNum : undefined,
           reason: editReason.trim()
         })
       });
@@ -153,6 +179,75 @@ export function ExpenseDetailsModal({
       setEditError(err.message || 'Failed to update transaction');
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  const handleStartEditPayment = (p) => {
+    setEditingPaymentId(p.id);
+    setEditPayAmount(String(p.amount));
+    setEditPayMethod(p.payment_method || 'cash');
+    setEditPayDate(p.payment_date ? p.payment_date.slice(0, 10) : new Date().toISOString().slice(0, 10));
+    setPaymentActionError('');
+  };
+
+  const handleCancelEditPayment = () => {
+    setEditingPaymentId(null);
+    setPaymentActionError('');
+  };
+
+  const handleSavePayment = async (paymentId) => {
+    const num = parseFloat(editPayAmount);
+    if (isNaN(num) || num <= 0) {
+      setPaymentActionError(lang === 'gu' ? 'કૃપા કરીને માન્ય રકમ દાખલ કરો.' : 'Please enter a valid amount.');
+      return;
+    }
+    setSavingPaymentAction(true);
+    setPaymentActionError('');
+    try {
+      const res = await apiFetch(`/api/expenses/${currentExpense.id}/payments/${paymentId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          amount: num,
+          payment_method: editPayMethod,
+          payment_date: editPayDate
+        })
+      });
+      if (res.expense) {
+        setCurrentExpense(res.expense);
+      }
+      setEditingPaymentId(null);
+      setNotice(lang === 'gu' ? 'ચૂકવણી વિગત સફળતાપૂર્વક સુધારાઈ!' : 'Payment details updated successfully!');
+      setTimeout(() => setNotice(''), 3000);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      setPaymentActionError(err.message || 'Failed to update payment');
+    } finally {
+      setSavingPaymentAction(false);
+    }
+  };
+
+  const handleDeletePayment = async (paymentId, amount, method) => {
+    const confirmMsg = lang === 'gu'
+      ? `શું તમે ખરેખર આ ₹${amount} (${(method || '').toUpperCase()}) ની ચૂકવણી કાઢી નાખવા માંગો છો? આનાથી બાકી રકમ ફરી ઉમેરાશે.`
+      : `Are you sure you want to delete this payment of ₹${amount} (${(method || '').toUpperCase()})? This will restore the balance due.`;
+    if (!window.confirm(confirmMsg)) return;
+
+    setSavingPaymentAction(true);
+    setPaymentActionError('');
+    try {
+      const res = await apiFetch(`/api/expenses/${currentExpense.id}/payments/${paymentId}`, {
+        method: 'DELETE'
+      });
+      if (res.expense) {
+        setCurrentExpense(res.expense);
+      }
+      setNotice(lang === 'gu' ? 'ચૂકવણી સફળતાપૂર્વક કાઢી નાખવામાં આવી!' : 'Payment removed successfully!');
+      setTimeout(() => setNotice(''), 3000);
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      setPaymentActionError(err.message || 'Failed to delete payment');
+    } finally {
+      setSavingPaymentAction(false);
     }
   };
 
@@ -171,14 +266,14 @@ export function ExpenseDetailsModal({
         body: JSON.stringify({
           amount: num,
           payment_method: paymentMethod,
-          reference_number: paymentRef || null
+          payment_date: paymentDate || new Date().toISOString().slice(0, 10)
         })
       });
       if (res.expense) {
         setCurrentExpense(res.expense);
       }
       setPaymentAmount('');
-      setPaymentRef('');
+      setPaymentDate(new Date().toISOString().slice(0, 10));
       setNotice(t('msg_payment_added'));
       setTimeout(() => setNotice(''), 3000);
       if (onRefresh) onRefresh();
@@ -388,6 +483,28 @@ export function ExpenseDetailsModal({
                 )}
               </div>
 
+              {/* Payment Method */}
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">
+                  {lang === 'gu' ? 'ચૂકવણી પદ્ધતિ (Payment Method)' : 'Payment Method'}
+                </label>
+                <select
+                  value={editPaymentMethod}
+                  onChange={(e) => setEditPaymentMethod(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-slate-300 bg-white font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                >
+                  <option value="upi">UPI (GPay / PhonePe / Paytm)</option>
+                  <option value="cash">{t('pm_cash')}</option>
+                  <option value="bank_transfer">{t('pm_bank_transfer')}</option>
+                  <option value="card">{t('pm_card')}</option>
+                </select>
+                {currentExpense.payments?.length > 0 && (
+                  <span className="text-[10px] text-blue-600 mt-0.5 block font-semibold">
+                    {lang === 'gu' ? 'ચૂકવણી હિસ્ટ્રીમાં પદ્ધતિ પણ બદલાશે' : 'Syncs with payment history'}
+                  </span>
+                )}
+              </div>
+
               {/* Vendor */}
               <div>
                 <label className="block text-slate-700 font-bold mb-1">
@@ -528,12 +645,23 @@ export function ExpenseDetailsModal({
 
             {/* Transaction Metadata Grid */}
             <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="p-3 rounded-xl bg-white border border-slate-200">
-                <span className="text-slate-400 block mb-0.5">{t('lbl_vendor')}</span>
-                <span className="font-semibold text-slate-800">
-                  {currentExpense.vendor_name || '—'} {currentExpense.vendor_phone ? `(${currentExpense.vendor_phone})` : ''}
-                </span>
-              </div>
+              {currentExpense.worker_name ? (
+                <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-300">
+                  <span className="text-amber-900 font-bold block mb-0.5">{lang === 'gu' ? 'કારીગર (Worker)' : 'Worker / Karigar'}</span>
+                  <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                    <Users className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>{currentExpense.worker_name}</span>
+                    {currentExpense.worker_phone && <span className="text-slate-500 font-normal">({currentExpense.worker_phone})</span>}
+                  </span>
+                </div>
+              ) : (
+                <div className="p-3 rounded-xl bg-white border border-slate-200">
+                  <span className="text-slate-400 block mb-0.5">{t('lbl_vendor')}</span>
+                  <span className="font-semibold text-slate-800">
+                    {currentExpense.vendor_name || '—'} {currentExpense.vendor_phone ? `(${currentExpense.vendor_phone})` : ''}
+                  </span>
+                </div>
+              )}
               <div className="p-3 rounded-xl bg-white border border-slate-200">
                 <span className="text-slate-400 block mb-0.5">{t('lbl_invoice_no')}</span>
                 <span className="font-semibold text-slate-800">
@@ -571,39 +699,71 @@ export function ExpenseDetailsModal({
         {/* Attachments Section */}
         {currentExpense.attachments && currentExpense.attachments.length > 0 && (
           <div className="space-y-2 border-t border-slate-100 pt-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-              Attached Receipts ({currentExpense.attachments.length})
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center justify-between">
+              <span>{lang === 'gu' ? 'જોડાયેલ બિલ / રસીદ' : 'Attached Receipts'} ({currentExpense.attachments.length})</span>
             </h4>
-            <div className="flex flex-wrap gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {currentExpense.attachments.map((att) => {
                 const token = localStorage.getItem('js_token');
                 const downloadUrl = `/api/expenses/attachments/${att.id}/download?token=${token}`;
                 const isImage = att.content_type.startsWith('image/');
                 return (
-                  <div key={att.id} className="p-2 rounded-xl border border-slate-200 bg-slate-50 flex items-center gap-3">
+                  <div key={att.id} className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 flex items-center gap-3 group hover:border-amber-300 transition">
                     {isImage ? (
-                      <img
-                        src={downloadUrl}
-                        alt="Receipt"
-                        className="w-12 h-12 object-cover rounded-lg border border-slate-200"
-                      />
+                      <div
+                        className="relative w-14 h-14 rounded-lg overflow-hidden border border-slate-200 shrink-0 cursor-zoom-in bg-slate-200"
+                        onClick={() => {
+                          setLightboxUrl(downloadUrl);
+                          setZoomLevel(1);
+                          setRotation(0);
+                        }}
+                      >
+                        <img
+                          src={downloadUrl}
+                          alt="Receipt"
+                          className="w-full h-full object-cover group-hover:scale-105 transition"
+                        />
+                        <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition flex items-center justify-center text-white">
+                          <ZoomIn className="w-4 h-4" />
+                        </div>
+                      </div>
                     ) : (
-                      <div className="w-12 h-12 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs">
+                      <div className="w-14 h-14 rounded-lg bg-rose-100 text-rose-800 flex items-center justify-center font-bold text-xs shrink-0">
                         PDF
                       </div>
                     )}
-                    <div className="text-xs">
-                      <div className="font-semibold text-slate-800 max-w-[150px] truncate">{att.original_filename}</div>
-                      <div className="text-slate-400 text-[10px]">{(att.file_size_bytes / 1024).toFixed(1)} KB</div>
-                      <a
-                        href={downloadUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-amber-700 hover:underline font-bold text-[11px] inline-flex items-center gap-0.5 mt-0.5"
-                      >
-                        <Download className="w-3 h-3" />
-                        <span>View / Download</span>
-                      </a>
+                    <div className="text-xs flex-1 min-w-0">
+                      <div className="font-semibold text-slate-800 truncate" title={att.original_filename}>
+                        {att.original_filename}
+                      </div>
+                      <div className="text-slate-400 text-[10px]">
+                        {(att.file_size_bytes / 1024).toFixed(1)} KB
+                      </div>
+                      <div className="flex items-center gap-2 mt-1">
+                        {isImage && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLightboxUrl(downloadUrl);
+                              setZoomLevel(1);
+                              setRotation(0);
+                            }}
+                            className="text-amber-800 hover:text-amber-900 font-bold text-[11px] inline-flex items-center gap-1 bg-amber-50 hover:bg-amber-100 px-2 py-0.5 rounded border border-amber-200 transition"
+                          >
+                            <ZoomIn className="w-3 h-3" />
+                            <span>{lang === 'gu' ? 'જુઓ' : 'Preview'}</span>
+                          </button>
+                        )}
+                        <a
+                          href={downloadUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-slate-600 hover:text-slate-900 font-bold text-[11px] inline-flex items-center gap-1 bg-white hover:bg-slate-100 px-2 py-0.5 rounded border border-slate-200 transition"
+                        >
+                          <Download className="w-3 h-3" />
+                          <span>{lang === 'gu' ? 'ડાઉનલોડ' : 'Download'}</span>
+                        </a>
+                      </div>
                     </div>
                   </div>
                 );
@@ -620,23 +780,145 @@ export function ExpenseDetailsModal({
             </h4>
           </div>
 
+          {paymentActionError && (
+            <div className="p-2.5 bg-rose-50 text-rose-800 border border-rose-200 rounded-xl text-xs flex items-center gap-2 font-medium">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{paymentActionError}</span>
+            </div>
+          )}
+
           {currentExpense.payments && currentExpense.payments.length > 0 ? (
-            <div className="space-y-1.5">
-              {currentExpense.payments.map((p) => (
-                <div key={p.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-200/60 text-xs">
-                  <div>
-                    <span className="font-bold text-slate-900">{formatINR(p.amount)}</span>{' '}
-                    <span className="capitalize text-slate-600 font-semibold">({p.payment_method})</span>
-                    {p.reference_number && (
-                      <span className="text-[11px] text-slate-400 ml-1">Ref: {p.reference_number}</span>
-                    )}
+            <div className="space-y-2">
+              {currentExpense.payments.map((p) => {
+                const isItemEditing = editingPaymentId === p.id;
+                if (isItemEditing) {
+                  return (
+                    <div key={p.id} className="p-3.5 rounded-xl bg-amber-50/90 border border-amber-300 space-y-3 animate-fade-in text-xs shadow-sm">
+                      <div className="flex items-center justify-between font-bold text-amber-950 pb-1.5 border-b border-amber-200/70">
+                        <span className="flex items-center gap-1.5">
+                          <Edit className="w-3.5 h-3.5 text-amber-700" />
+                          {lang === 'gu' ? 'ચૂકવણી સુધારો (Edit Payment)' : 'Edit Payment Details'}
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-mono">ID: {p.id.slice(0, 10)}...</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                            {t('lbl_amount')} (₹) *
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0.01"
+                            value={editPayAmount}
+                            onChange={(e) => setEditPayAmount(e.target.value)}
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                            {lang === 'gu' ? 'ચૂકવણી પદ્ધતિ' : 'Payment Method'} *
+                          </label>
+                          <select
+                            value={editPayMethod}
+                            onChange={(e) => setEditPayMethod(e.target.value)}
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                          >
+                            <option value="upi">UPI (GPay / PhonePe / Paytm)</option>
+                            <option value="cash">{t('pm_cash')}</option>
+                            <option value="bank_transfer">{t('pm_bank_transfer')}</option>
+                            <option value="card">{t('pm_card')}</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                            {lang === 'gu' ? 'ચૂકવણી તારીખ' : 'Payment Date'} *
+                          </label>
+                          <input
+                            type="date"
+                            value={editPayDate}
+                            onChange={(e) => setEditPayDate(e.target.value)}
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                            required
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-end gap-2 pt-1 border-t border-amber-200/50">
+                        <button
+                          type="button"
+                          onClick={handleCancelEditPayment}
+                          disabled={savingPaymentAction}
+                          className="px-3 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold transition"
+                        >
+                          {lang === 'gu' ? 'રદ કરો' : 'Cancel'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSavePayment(p.id)}
+                          disabled={savingPaymentAction}
+                          className="px-3.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-sm flex items-center gap-1.5"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>{savingPaymentAction ? 'Saving...' : (lang === 'gu' ? 'સાચવો' : 'Save')}</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
+
+                const methodBadgeColor = p.payment_method === 'upi'
+                  ? 'bg-blue-100 text-blue-800 border-blue-200'
+                  : p.payment_method === 'cash'
+                  ? 'bg-slate-100 text-slate-800 border-slate-200'
+                  : p.payment_method === 'bank_transfer'
+                  ? 'bg-purple-100 text-purple-800 border-purple-200'
+                  : 'bg-amber-100 text-amber-800 border-amber-200';
+
+                return (
+                  <div key={p.id} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 text-xs hover:border-slate-300 transition">
+                    <div className="flex items-center gap-2.5">
+                      <div className="flex flex-col">
+                        <div className="flex items-center gap-2">
+                          <span className="font-extrabold text-slate-900 text-sm">{formatINR(p.amount)}</span>
+                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border uppercase tracking-wider ${methodBadgeColor}`}>
+                            {p.payment_method === 'upi' ? 'UPI' : p.payment_method}
+                          </span>
+                        </div>
+                        {p.reference_number && (
+                          <span className="text-[11px] text-slate-400 mt-0.5">Ref: {p.reference_number}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="text-right text-[11px] text-slate-500">
+                        <div className="font-medium text-slate-700">{formatDate(p.payment_date)}</div>
+                        <div className="text-[10px] text-slate-400">By: {p.recorded_by_name}</div>
+                      </div>
+                      {isOwnerOrManager && currentExpense.approval_status !== 'voided' && (
+                        <div className="flex items-center gap-1 pl-2 border-l border-slate-200">
+                          <button
+                            type="button"
+                            onClick={() => handleStartEditPayment(p)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition"
+                            title={lang === 'gu' ? 'ચૂકવણી સુધારો (Edit Payment Method / Amount)' : 'Edit Payment Method / Amount'}
+                          >
+                            <Edit className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePayment(p.id, p.amount, p.payment_method)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                            title={lang === 'gu' ? 'ચૂકવણી રદ કરો (Delete Payment)' : 'Delete Payment'}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div className="text-right text-[11px] text-slate-500">
-                    <div>{formatDate(p.payment_date)}</div>
-                    <div>By: {p.recorded_by_name}</div>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="text-xs text-slate-400 italic">No payments recorded yet.</div>
@@ -644,46 +926,79 @@ export function ExpenseDetailsModal({
 
           {/* Add Installment Form (if balance due > 0 and not voided and not currently editing) */}
           {!isEditing && (currentExpense.balance_due || 0) > 0 && currentExpense.approval_status !== 'voided' && currentExpense.approval_status !== 'rejected' && (
-            <form onSubmit={handleAddPayment} className="p-3 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-2.5">
-              <div className="text-xs font-bold text-amber-900">
-                {t('btn_add_payment')} (Remaining: {formatINR(currentExpense.balance_due)})
+            <form onSubmit={handleAddPayment} className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-black text-amber-950">
+                    {t('btn_add_payment')} (Remaining: {formatINR(currentExpense.balance_due)})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const bal = currentExpense.balance_due || 0;
+                      setPaymentAmount(bal.toString());
+                    }}
+                    className="px-2.5 py-1 text-[11px] font-black rounded-lg bg-blue-600 hover:bg-blue-700 active:scale-95 text-white shadow-sm transition flex items-center gap-1"
+                    title={lang === 'gu' ? 'બાકી પૂરી રકમ આપોઆપ ભરો' : 'Auto-fill full remaining balance'}
+                  >
+                    <span>{lang === 'gu' ? 'ચૂકતે કરો (Full Pay)' : 'Full Pay'}</span>
+                  </button>
+                </div>
               </div>
+
               {paymentError && (
-                <div className="text-xs text-red-600">{paymentError}</div>
+                <div className="text-xs text-red-600 font-semibold">{paymentError}</div>
               )}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <input
-                  type="number"
-                  step="0.01"
-                  max={currentExpense.balance_due}
-                  required
-                  placeholder="Amount (₹)"
-                  value={paymentAmount}
-                  onChange={(e) => setPaymentAmount(e.target.value)}
-                  className="px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 focus:outline-none"
-                />
-                <select
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
-                  className="px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 focus:outline-none"
-                >
-                  <option value="cash">{t('pm_cash')}</option>
-                  <option value="upi">UPI</option>
-                  <option value="bank_transfer">Bank</option>
-                  <option value="card">{t('pm_card')}</option>
-                </select>
-                <input
-                  type="text"
-                  placeholder="UTR / Ref No."
-                  value={paymentRef}
-                  onChange={(e) => setPaymentRef(e.target.value)}
-                  className="px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 focus:outline-none"
-                />
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                    {t('lbl_amount')} (₹) *
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    max={currentExpense.balance_due}
+                    required
+                    placeholder="Amount (₹)"
+                    value={paymentAmount}
+                    onChange={(e) => setPaymentAmount(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                    {t('lbl_payment_method')} *
+                  </label>
+                  <select
+                    value={paymentMethod}
+                    onChange={(e) => setPaymentMethod(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  >
+                    <option value="cash">{t('pm_cash')}</option>
+                    <option value="upi">UPI (GPay / PhonePe)</option>
+                    <option value="bank_transfer">{t('pm_bank_transfer')}</option>
+                    <option value="card">{t('pm_card')}</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                    {lang === 'gu' ? 'ચૂકવણી તારીખ (Date)' : 'Payment Date'} *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={paymentDate}
+                    onChange={(e) => setPaymentDate(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  />
+                </div>
               </div>
+
               <button
                 type="submit"
                 disabled={submittingPayment}
-                className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition"
+                className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition shadow-sm"
               >
                 {submittingPayment ? 'Recording...' : t('btn_add_payment')}
               </button>
@@ -799,6 +1114,94 @@ export function ExpenseDetailsModal({
           )}
         </div>
       </div>
+
+      {/* Interactive Lightbox Fullscreen Viewer */}
+      {lightboxUrl && (
+        <div className="fixed inset-0 z-[70] bg-black/95 flex flex-col animate-fade-in">
+          {/* Top Lightbox Toolbar */}
+          <div className="p-3 px-4 flex items-center justify-between text-white border-b border-white/10 bg-black/40">
+            <div className="flex items-center gap-2">
+              <Receipt className="w-4 h-4 text-amber-400" />
+              <span className="font-bold text-sm">
+                {currentExpense.transaction_number ? `Receipt — ${currentExpense.transaction_number}` : 'Receipt Viewer'}
+              </span>
+            </div>
+
+            {/* Lightbox Controls */}
+            <div className="flex items-center gap-1 sm:gap-2">
+              <button
+                type="button"
+                onClick={() => setZoomLevel((z) => Math.min(z + 0.3, 3))}
+                className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition"
+                title="Zoom In"
+              >
+                <ZoomIn className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoomLevel((z) => Math.max(z - 0.3, 0.7))}
+                className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition"
+                title="Zoom Out"
+              >
+                <ZoomOut className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setRotation((r) => (r + 90) % 360)}
+                className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition"
+                title="Rotate 90°"
+              >
+                <RotateCw className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setZoomLevel(1);
+                  setRotation(0);
+                }}
+                className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition"
+                title="Reset Zoom"
+              >
+                <Maximize2 className="w-4 h-4" />
+              </button>
+              <a
+                href={lightboxUrl}
+                download="receipt.jpg"
+                className="p-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white transition ml-2"
+                title="Download"
+              >
+                <Download className="w-4 h-4" />
+              </a>
+              <button
+                type="button"
+                onClick={() => setLightboxUrl(null)}
+                className="p-1.5 rounded-lg bg-white/10 hover:bg-rose-600 text-white transition ml-2"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Lightbox Image Stage */}
+          <div className="flex-1 overflow-auto flex items-center justify-center p-4">
+            <img
+              src={lightboxUrl}
+              alt="Receipt Fullscreen"
+              style={{
+                transform: `scale(${zoomLevel}) rotate(${rotation}deg)`,
+                transition: 'transform 0.15s ease-out'
+              }}
+              className="max-h-[88vh] max-w-[92vw] object-contain shadow-2xl rounded select-none cursor-grab active:cursor-grabbing"
+            />
+          </div>
+
+          {/* Bottom Zoom Indicator */}
+          <div className="p-2 text-center text-xs text-white/50 border-t border-white/10">
+            {Math.round(zoomLevel * 100)}% zoom • Click and drag or use toolbar controls
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useLanguage } from '../context/LanguageContext';
 import apiFetch from '../api';
-import { VENDOR_CATEGORIES, PAYMENT_TERMS_OPTIONS, BUSINESS_TYPES } from './AddVendorModal';
+import { VENDOR_CATEGORIES, PAYMENT_TERMS_OPTIONS, BUSINESS_TYPES } from '../constants/vendorConstants.js';
+import BillDetailModal from './BillDetailModal';
+import ExpenseDetailsModal from './ExpenseDetailsModal';
 import {
   X,
   Building2,
@@ -20,7 +22,8 @@ import {
   ExternalLink,
   ChevronRight,
   ShieldCheck,
-  RefreshCw
+  RefreshCw,
+  Eye
 } from 'lucide-react';
 
 const DEFAULT_FORM_VALUES = {
@@ -68,6 +71,25 @@ export function VendorDetailModal({ isOpen, vendorId, onClose, onVendorUpdated }
   // Unsaved changes confirmation dialog
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
 
+  // Selected Bill & Expense for Details Modals
+  const [selectedBill, setSelectedBill] = useState(null);
+  const [selectedExpense, setSelectedExpense] = useState(null);
+  const [loadingExpense, setLoadingExpense] = useState(false);
+
+  const handleOpenExpense = async (expenseId) => {
+    setLoadingExpense(true);
+    try {
+      const res = await apiFetch(`/api/expenses/${expenseId}`);
+      if (res.expense) {
+        setSelectedExpense(res.expense);
+      }
+    } catch (err) {
+      alert(err.message || 'Failed to load expense details');
+    } finally {
+      setLoadingExpense(false);
+    }
+  };
+
   useEffect(() => {
     if (isOpen && vendorId) {
       loadVendorProfile();
@@ -83,7 +105,8 @@ export function VendorDetailModal({ isOpen, vendorId, onClose, onVendorUpdated }
       const res = await apiFetch(`/api/vendors/${vendorId}`);
       if (res.vendor) {
         setVendorData(res.vendor);
-        setBills(res.bills || []);
+        const uniqueBills = Array.from(new Map((res.bills || []).map(b => [b.id, b])).values());
+        setBills(uniqueBills);
         setExpenses(res.expenses || []);
         setSummary(res.summary || null);
 
@@ -641,49 +664,75 @@ export function VendorDetailModal({ isOpen, vendorId, onClose, onVendorUpdated }
                             <th className="px-3 py-2">{t('lbl_invoice_date')}</th>
                             <th className="px-3 py-2">{t('lbl_amount')}</th>
                             <th className="px-3 py-2">{t('lbl_payment_status')}</th>
-                            <th className="px-3 py-2 text-right">Attachment</th>
+                            <th className="px-3 py-2 text-right">{lang === 'gu' ? 'કાર્યવાહી' : 'Actions'}</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {bills.map((b) => (
-                            <tr key={b.id} className="hover:bg-slate-50">
-                              <td className="px-3 py-2 font-mono font-bold text-slate-900">
-                                {b.bill_number || '—'}
-                              </td>
-                              <td className="px-3 py-2 text-slate-600">
-                                {formatDate(b.bill_date)}
-                              </td>
-                              <td className="px-3 py-2 font-black text-slate-900">
-                                {formatINR(b.total_amount)}
-                              </td>
-                              <td className="px-3 py-2">
-                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                  b.payment_status === 'paid'
-                                    ? 'bg-emerald-100 text-emerald-800'
-                                    : b.payment_status === 'partially_paid'
-                                    ? 'bg-amber-100 text-amber-800'
-                                    : 'bg-rose-100 text-rose-800'
-                                }`}>
-                                  {b.payment_status}
-                                </span>
-                              </td>
-                              <td className="px-3 py-2 text-right">
-                                {b.attachment_id ? (
-                                  <a
-                                    href={`/api/vendors/bills/attachments/${b.attachment_id}/download`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 hover:text-amber-800"
-                                  >
-                                    <Download className="w-3.5 h-3.5" />
-                                    <span>Download</span>
-                                  </a>
-                                ) : (
-                                  <span className="text-slate-300">—</span>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
+                        <tbody className="divide-y divide-slate-100 bg-white">
+                          {bills.map((b) => {
+                            const token = localStorage.getItem('js_token') || '';
+                            const downloadUrl = b.attachment_id
+                              ? `/api/vendors/bills/attachments/${b.attachment_id}/download?token=${token}`
+                              : null;
+                            return (
+                              <tr
+                                key={b.id}
+                                onClick={() => setSelectedBill(b)}
+                                className="hover:bg-amber-50/60 cursor-pointer transition group"
+                                title={lang === 'gu' ? 'બિલ અને વિગતવાર ઇનવોઇસ જોવા માટે ક્લિક કરો' : 'Click to view bill and detailed invoice'}
+                              >
+                                <td className="px-3 py-2.5 font-mono font-bold text-slate-900 group-hover:text-amber-800">
+                                  <div className="flex items-center gap-1.5">
+                                    <span>{b.bill_number || '—'}</span>
+                                    {b.expense_id && (
+                                      <span className="w-1.5 h-1.5 rounded-full bg-blue-500" title="Linked to Daily Expense" />
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2.5 text-slate-600">
+                                  {formatDate(b.bill_date)}
+                                </td>
+                                <td className="px-3 py-2.5 font-black text-slate-900">
+                                  {formatINR(b.total_amount)}
+                                </td>
+                                <td className="px-3 py-2.5">
+                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                    b.payment_status === 'paid'
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : b.payment_status === 'partially_paid'
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-rose-100 text-rose-800'
+                                  }`}>
+                                    {b.payment_status}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2.5 text-right">
+                                  <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedBill(b)}
+                                      className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold text-[11px] inline-flex items-center gap-1 shadow-sm transition"
+                                      title={lang === 'gu' ? 'બિલ અને ઇનવોઇસ વિગત જુઓ' : 'View Bill & Invoice Details'}
+                                    >
+                                      <Eye className="w-3.5 h-3.5" />
+                                      <span>{t('btn_view_details') || 'View'}</span>
+                                    </button>
+
+                                    {downloadUrl && (
+                                      <a
+                                        href={downloadUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+                                        title={lang === 'gu' ? 'બિલ ડાઉનલોડ કરો' : 'Download bill attachment'}
+                                      >
+                                        <Download className="w-3.5 h-3.5" />
+                                      </a>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -710,24 +759,30 @@ export function VendorDetailModal({ isOpen, vendorId, onClose, onVendorUpdated }
                             <th className="px-3 py-2">{t('th_category')}</th>
                             <th className="px-3 py-2">{t('th_amount')}</th>
                             <th className="px-3 py-2">{t('th_status')}</th>
+                            <th className="px-3 py-2 text-right">{lang === 'gu' ? 'કાર્યવાહી' : 'Actions'}</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100">
+                        <tbody className="divide-y divide-slate-100 bg-white">
                           {expenses.map((e) => (
-                            <tr key={e.id} className="hover:bg-slate-50">
-                              <td className="px-3 py-2 font-mono font-bold text-slate-900">
+                            <tr
+                              key={e.id}
+                              onClick={() => handleOpenExpense(e.id)}
+                              className="hover:bg-amber-50/60 cursor-pointer transition group"
+                              title={lang === 'gu' ? 'દૈનિક ખર્ચ વ્યવહાર વિગત જોવા માટે ક્લિક કરો' : 'Click to view daily expense details'}
+                            >
+                              <td className="px-3 py-2.5 font-mono font-bold text-slate-900 group-hover:text-amber-800">
                                 {e.transaction_number}
                               </td>
-                              <td className="px-3 py-2 text-slate-600">
+                              <td className="px-3 py-2.5 text-slate-600">
                                 {formatDate(e.transaction_date)}
                               </td>
-                              <td className="px-3 py-2 text-slate-700">
+                              <td className="px-3 py-2.5 text-slate-700">
                                 {lang === 'gu' ? e.category_name_gu : e.category_name_en}
                               </td>
-                              <td className="px-3 py-2 font-black text-slate-900">
+                              <td className="px-3 py-2.5 font-black text-slate-900">
                                 {formatINR(e.amount)}
                               </td>
-                              <td className="px-3 py-2">
+                              <td className="px-3 py-2.5">
                                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                                   e.payment_status === 'paid'
                                     ? 'bg-emerald-100 text-emerald-800'
@@ -735,6 +790,19 @@ export function VendorDetailModal({ isOpen, vendorId, onClose, onVendorUpdated }
                                 }`}>
                                   {e.payment_status}
                                 </span>
+                              </td>
+                              <td className="px-3 py-2.5 text-right">
+                                <div className="flex items-center justify-end" onClick={(ev) => ev.stopPropagation()}>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenExpense(e.id)}
+                                    className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold text-[11px] inline-flex items-center gap-1 shadow-sm transition"
+                                    title={lang === 'gu' ? 'વ્યવહાર વિગત જુઓ' : 'View Transaction Details'}
+                                  >
+                                    <Eye className="w-3.5 h-3.5" />
+                                    <span>{t('btn_view_details') || 'View'}</span>
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           ))}
@@ -829,6 +897,39 @@ export function VendorDetailModal({ isOpen, vendorId, onClose, onVendorUpdated }
             </div>
           </div>
         </div>
+      )}
+
+      {/* Bill & Invoice Details Modal with Actual Bill Viewer */}
+      {selectedBill && (
+        <BillDetailModal
+          bill={selectedBill}
+          vendor={vendorData}
+          isOpen={!!selectedBill}
+          onClose={() => setSelectedBill(null)}
+          onOpenExpense={(expenseId) => {
+            setSelectedBill(null);
+            handleOpenExpense(expenseId);
+          }}
+          onBillUpdated={() => {
+            loadVendorProfile();
+            if (onVendorUpdated) onVendorUpdated();
+          }}
+        />
+      )}
+
+      {/* Daily Expense Details Modal */}
+      {selectedExpense && (
+        <ExpenseDetailsModal
+          expense={selectedExpense}
+          categories={[]}
+          vendors={vendorData ? [vendorData] : []}
+          onClose={() => setSelectedExpense(null)}
+          onRefresh={() => {
+            loadVendorProfile();
+            handleOpenExpense(selectedExpense.id);
+            if (onVendorUpdated) onVendorUpdated();
+          }}
+        />
       )}
     </div>
   );

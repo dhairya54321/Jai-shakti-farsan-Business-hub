@@ -26,7 +26,10 @@ router.post('/scan-receipt', uploadAttachment.any(), async (req, res) => {
     const settings = db.prepare('SELECT gemini_api_key FROM business_settings WHERE business_id = ?').get(req.user.business_id);
     const geminiApiKey = req.body.geminiApiKey || req.headers['x-gemini-api-key'] || settings?.gemini_api_key || config.GEMINI_API_KEY || null;
 
-    const ocrResult = await processBillFile(uploadedFile.path, uploadedFile.mimetype, { geminiApiKey });
+    // Fetch active known vendors for instant profile auto-fill & fast 4-field extraction
+    const knownVendors = db.prepare('SELECT id, name, category, phone, gstin, pan, address, city, contact_person FROM vendors WHERE business_id = ? AND is_active = 1').all(req.user.business_id);
+
+    const ocrResult = await processBillFile(uploadedFile.path, uploadedFile.mimetype, { geminiApiKey, knownVendors });
 
     // Check potential duplicate / matching vendors
     const duplicateCheck = VendorService.checkDuplicates(req.user.business_id, {
@@ -43,12 +46,8 @@ router.post('/scan-receipt', uploadAttachment.any(), async (req, res) => {
     } else if (ocrResult.extracted.vendorName) {
       const vMatch = db.prepare(`
         SELECT * FROM vendors 
-        WHERE business_id = ? AND (
-          UPPER(TRIM(name)) = UPPER(TRIM(?)) OR
-          UPPER(TRIM(?)) LIKE '%' || UPPER(TRIM(name)) || '%' OR
-          UPPER(TRIM(name)) LIKE '%' || UPPER(TRIM(?)) || '%'
-        )
-      `).get(req.user.business_id, ocrResult.extracted.vendorName, ocrResult.extracted.vendorName, ocrResult.extracted.vendorName);
+        WHERE business_id = ? AND UPPER(TRIM(name)) = UPPER(TRIM(?))
+      `).get(req.user.business_id, ocrResult.extracted.vendorName);
       if (vMatch) {
         matchedVendor = vMatch;
         duplicateCheck.matches.push({ vendor: vMatch, matchedFields: ['name'] });
@@ -58,24 +57,20 @@ router.post('/scan-receipt', uploadAttachment.any(), async (req, res) => {
 
     if (matchedVendor) {
       ocrResult.extracted.vendorId = matchedVendor.id;
-      ocrResult.extracted.vendorName = matchedVendor.name;
-      if (matchedVendor.category) {
-        ocrResult.extracted.vendorCategory = matchedVendor.category;
-      }
     }
 
-    let duplicateExpense = null;
-    if (matchedVendor) {
-      const dupeCheck = ExpenseService.checkDuplicateExpense(req.user.business_id, {
-        vendor_id: matchedVendor.id,
-        invoice_number: ocrResult.extracted.invoiceNumber,
-        transaction_date: ocrResult.extracted.invoiceDate,
-        amount: ocrResult.extracted.totalAmount
-      });
-      if (dupeCheck.isDuplicate) {
-        duplicateExpense = dupeCheck.duplicate;
-      }
-    }
+    // Check if this receipt/bill is already in the record book
+    const dupeCheck = ExpenseService.checkBillDuplicate(req.user.business_id, {
+      vendor_id: matchedVendor?.id || null,
+      vendor_name: ocrResult.extracted.vendorName,
+      gstin: ocrResult.extracted.gstin,
+      invoice_number: ocrResult.extracted.invoiceNumber,
+      transaction_date: ocrResult.extracted.invoiceDate,
+      amount: ocrResult.extracted.totalAmount,
+      file_path: uploadedFile.path,
+      stored_filename: uploadedFile.filename
+    });
+    const duplicateExpense = dupeCheck.isDuplicate ? dupeCheck.duplicate : null;
 
     res.json({
       success: true,
@@ -172,6 +167,27 @@ router.post('/:id/payments', (req, res) => {
   }
 });
 
+// PUT /api/expenses/:id/payments/:paymentId - Update an existing payment installment
+router.put('/:id/payments/:paymentId', (req, res) => {
+  try {
+    const updated = ExpenseService.updatePayment(req.user, req.params.id, req.params.paymentId, req.body);
+    res.json({ success: true, expense: updated });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE /api/expenses/:id/payments/:paymentId - Delete an existing payment installment
+router.delete('/:id/payments/:paymentId', (req, res) => {
+  try {
+    const reason = req.body?.reason || req.query?.reason || 'Payment deleted by user';
+    const updated = ExpenseService.deletePayment(req.user, req.params.id, req.params.paymentId, reason);
+    res.json({ success: true, expense: updated });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
 // POST /api/expenses/:id/approve - Approve pending expense (Owner/Manager only)
 router.post('/:id/approve', requireRole(['owner', 'manager']), (req, res) => {
   try {
@@ -219,10 +235,17 @@ router.delete('/:id', requireRole(['owner', 'manager']), (req, res) => {
 router.get('/attachments/:id/download', (req, res) => {
   try {
     const db = getDatabase();
-    const attachment = db.prepare(`
+    let attachment = db.prepare(`
       SELECT * FROM expense_attachments
       WHERE id = ? AND business_id = ?
     `).get(req.params.id, req.user.business_id);
+
+    if (!attachment) {
+      attachment = db.prepare(`
+        SELECT * FROM bill_attachments
+        WHERE id = ? AND business_id = ?
+      `).get(req.params.id, req.user.business_id);
+    }
 
     if (!attachment) {
       return res.status(404).json({ success: false, error: 'Attachment not found.' });

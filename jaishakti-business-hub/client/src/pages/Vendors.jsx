@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useLanguage } from '../context/LanguageContext';
 import apiFetch from '../api';
-import AddVendorModal, { VENDOR_CATEGORIES } from './AddVendorModal';
+import AddVendorModal from './AddVendorModal';
+import { VENDOR_CATEGORIES } from '../constants/vendorConstants.js';
 import VendorDetailModal from './VendorDetailModal';
 import BillOcrModal from './BillOcrModal';
 import {
@@ -29,8 +30,8 @@ export function vendorMatchesCategory(vendorCategory, selectedCategory) {
   if (!selectedCategory) return true;
   if (!vendorCategory) return false;
 
-  const raw = vendorCategory.toLowerCase().trim();
-  const selected = selectedCategory.toLowerCase().trim();
+  const raw = String(vendorCategory).toLowerCase().trim();
+  const selected = String(selectedCategory).toLowerCase().trim();
 
   if (raw === selected) return true;
 
@@ -128,7 +129,10 @@ export function Vendors() {
 
   // Instant in-memory filter for 0ms response across category, status, and search
   const displayedVendors = useMemo(() => {
+    if (!Array.isArray(vendors)) return [];
     return vendors.filter(v => {
+      if (!v) return false;
+
       // 1. Category filter by main title, ignoring brackets
       if (categoryFilter && !vendorMatchesCategory(v.category, categoryFilter)) {
         return false;
@@ -140,17 +144,17 @@ export function Vendors() {
         if (Boolean(v.is_active) !== isActive) return false;
       }
 
-      // 3. Search text matching
+      // 3. Search text matching (safely coerce all fields to strings)
       if (search.trim()) {
         const q = search.trim().toLowerCase();
         const matches =
-          (v.name && v.name.toLowerCase().includes(q)) ||
-          (v.phone && v.phone.includes(q)) ||
-          (v.alternate_phone && v.alternate_phone.includes(q)) ||
-          (v.contact_person && v.contact_person.toLowerCase().includes(q)) ||
-          (v.category && v.category.toLowerCase().includes(q)) ||
-          (v.city && v.city.toLowerCase().includes(q)) ||
-          (v.gstin && v.gstin.toLowerCase().includes(q));
+          (v.name && String(v.name).toLowerCase().includes(q)) ||
+          (v.phone && String(v.phone).includes(q)) ||
+          (v.alternate_phone && String(v.alternate_phone).includes(q)) ||
+          (v.contact_person && String(v.contact_person).toLowerCase().includes(q)) ||
+          (v.category && String(v.category).toLowerCase().includes(q)) ||
+          (v.city && String(v.city).toLowerCase().includes(q)) ||
+          (v.gstin && String(v.gstin).toLowerCase().includes(q));
 
         if (!matches) return false;
       }
@@ -276,7 +280,7 @@ export function Vendors() {
                 <option value="">
                   {lang === 'gu' ? 'બધી કેટેગરી' : 'All Categories'}
                 </option>
-                {VENDOR_CATEGORIES.map(c => (
+                {(VENDOR_CATEGORIES || []).map(c => (
                   <option key={c.id} value={c.id}>
                     {lang === 'gu' ? c.gu : c.en}
                   </option>
@@ -307,7 +311,7 @@ export function Vendors() {
               <span>
                 {displayedVendors.length} {displayedVendors.length === 1 ? 'matching vendor' : 'matching vendors'}
                 {categoryFilter && (
-                  <span className="text-slate-700"> • <strong className="text-amber-800">{VENDOR_CATEGORIES.find(c => c.id === categoryFilter)?.[lang] || categoryFilter}</strong></span>
+                  <span className="text-slate-700"> • <strong className="text-amber-800">{(VENDOR_CATEGORIES || []).find(c => c.id === categoryFilter)?.[lang] || categoryFilter}</strong></span>
                 )}
                 {search && (
                   <span className="text-slate-700"> for "<strong className="text-amber-800">{search}</strong>"</span>
@@ -415,7 +419,7 @@ export function Vendors() {
                       {/* 2. Category */}
                       <td className="px-5 py-3.5 text-slate-600">
                         <span className="px-2.5 py-1 rounded-lg text-[11px] bg-slate-100 font-medium text-slate-700">
-                          {VENDOR_CATEGORIES.find(c => c.id === v.category)?.[lang] || v.category || '—'}
+                          {(VENDOR_CATEGORIES || []).find(c => c.id === v.category)?.[lang] || v.category || '—'}
                         </span>
                       </td>
 
@@ -484,7 +488,7 @@ export function Vendors() {
                   {/* Primary 3 columns information in responsive display */}
                   <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600 pt-1">
                     <span className="px-2 py-0.5 rounded bg-slate-100 text-[11px] font-medium text-slate-700">
-                      {VENDOR_CATEGORIES.find(c => c.id === v.category)?.[lang] || v.category || '—'}
+                      {(VENDOR_CATEGORIES || []).find(c => c.id === v.category)?.[lang] || v.category || '—'}
                     </span>
                     {v.phone && (
                       <span className="font-mono text-slate-700 flex items-center gap-1">
@@ -545,7 +549,7 @@ export function Vendors() {
         isOpen={showAddModal}
         onClose={() => setShowAddModal(false)}
         onVendorCreated={handleVendorCreated}
-        onSelectExisting={(v) => setSelectedVendorId(v.id)}
+        onSelectExisting={(v) => setSelectedVendorId(v?.id || v)}
       />
 
       {/* Bill OCR / Scan Modal */}
@@ -553,13 +557,13 @@ export function Vendors() {
         isOpen={showScanModal}
         onClose={() => setShowScanModal(false)}
         onBillSaved={handleBillSaved}
-        vendors={vendors}
+        vendors={vendors || []}
       />
 
       {/* Dedicated Vendor Detail Profile Modal */}
       {selectedVendorId && (
         <VendorDetailModal
-          isOpen={!!selectedVendorId}
+          isOpen={Boolean(selectedVendorId)}
           vendorId={selectedVendorId}
           onClose={() => setSelectedVendorId(null)}
           onVendorUpdated={handleVendorUpdated}

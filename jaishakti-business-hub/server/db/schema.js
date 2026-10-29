@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS business_members (
   business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK(role IN ('owner', 'manager', 'accountant', 'staff')),
+  permissions TEXT,
   is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -93,6 +94,7 @@ CREATE TABLE IF NOT EXISTS expenses (
   transaction_number TEXT NOT NULL,
   category_id TEXT NOT NULL REFERENCES expense_categories(id),
   vendor_id TEXT REFERENCES vendors(id),
+  worker_id TEXT REFERENCES workers(id),
   transaction_type TEXT NOT NULL DEFAULT 'operating_expense',
   description TEXT,
   transaction_date TEXT NOT NULL,
@@ -208,5 +210,128 @@ CREATE INDEX IF NOT EXISTS idx_payments_expense ON expense_payments(expense_id);
 CREATE INDEX IF NOT EXISTS idx_attachments_expense ON expense_attachments(expense_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_biz_time ON audit_logs(business_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
+
+-- Phase 2 (Part B): Manufacturing, Recipe Vault & Raw Materials Stock
+CREATE TABLE IF NOT EXISTS raw_materials (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  name_en TEXT NOT NULL,
+  name_gu TEXT NOT NULL,
+  category TEXT NOT NULL CHECK(category IN ('flour', 'oil', 'spice', 'vegetable', 'fuel', 'packaging', 'trading', 'other')),
+  primary_unit TEXT NOT NULL CHECK(primary_unit IN ('tin_15kg', 'bag_25kg', 'bag_30kg', 'bag_50kg', 'kg', 'g', 'cylinder_19kg', 'piece', 'pkt', 'box', 'dabba', 'katta')),
+  base_unit TEXT NOT NULL DEFAULT 'kg' CHECK(base_unit IN ('kg', 'g', 'cylinder', 'piece', 'box')),
+  unit_ratio REAL NOT NULL DEFAULT 1,
+  current_stock REAL NOT NULL DEFAULT 0,
+  min_stock_alert REAL NOT NULL DEFAULT 0,
+  cost_per_unit REAL DEFAULT 0,
+  supplier_vendor_id TEXT REFERENCES vendors(id),
+  notes TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recipes (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  name_en TEXT NOT NULL,
+  name_gu TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'daily_farsan' CHECK(category IN ('daily_farsan', 'festive_sweet', 'dry_snack', 'namkeen', 'other')),
+  base_batch_size REAL NOT NULL DEFAULT 10 CHECK(base_batch_size > 0),
+  batch_unit TEXT NOT NULL DEFAULT 'kg',
+  prep_time_minutes INTEGER DEFAULT 60,
+  chef_notes TEXT,
+  photo_url TEXT,
+  is_frequent INTEGER NOT NULL DEFAULT 1,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recipe_ingredients (
+  id TEXT PRIMARY KEY,
+  recipe_id TEXT NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+  raw_material_id TEXT NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,
+  quantity REAL NOT NULL CHECK(quantity > 0),
+  unit TEXT NOT NULL DEFAULT 'kg',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  notes TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS production_batches (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  batch_number TEXT NOT NULL,
+  recipe_id TEXT NOT NULL REFERENCES recipes(id),
+  product_name_en TEXT NOT NULL,
+  product_name_gu TEXT NOT NULL,
+  target_weight REAL NOT NULL CHECK(target_weight > 0),
+  weight_unit TEXT NOT NULL DEFAULT 'kg',
+  scale_factor REAL NOT NULL DEFAULT 1.0,
+  production_date TEXT NOT NULL,
+  chef_id TEXT REFERENCES users(id),
+  chef_name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'completed' CHECK(status IN ('in_progress', 'completed', 'cancelled')),
+  notes TEXT,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS batch_consumptions (
+  id TEXT PRIMARY KEY,
+  batch_id TEXT NOT NULL REFERENCES production_batches(id) ON DELETE CASCADE,
+  raw_material_id TEXT NOT NULL REFERENCES raw_materials(id),
+  material_name_en TEXT NOT NULL,
+  material_name_gu TEXT NOT NULL,
+  required_quantity REAL NOT NULL,
+  actual_quantity REAL NOT NULL,
+  unit TEXT NOT NULL,
+  is_checked INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS stock_transactions (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  raw_material_id TEXT NOT NULL REFERENCES raw_materials(id) ON DELETE CASCADE,
+  transaction_type TEXT NOT NULL CHECK(transaction_type IN ('inward_ocr', 'inward_manual', 'outward_production', 'adjustment_loss', 'adjustment_gain')),
+  quantity REAL NOT NULL,
+  unit TEXT NOT NULL,
+  base_quantity REAL NOT NULL,
+  stock_before REAL NOT NULL,
+  stock_after REAL NOT NULL,
+  reference_id TEXT,
+  reference_type TEXT,
+  notes TEXT,
+  recorded_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_raw_mat_biz ON raw_materials(business_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_recipes_biz ON recipes(business_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_recipe_ing_recipe ON recipe_ingredients(recipe_id);
+CREATE INDEX IF NOT EXISTS idx_prod_batches_biz_date ON production_batches(business_id, production_date DESC);
+CREATE INDEX IF NOT EXISTS idx_batch_consump_batch ON batch_consumptions(batch_id);
+CREATE INDEX IF NOT EXISTS idx_stock_tx_biz_mat ON stock_transactions(business_id, raw_material_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS worker_diary_scans (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  worker_id TEXT NOT NULL REFERENCES workers(id) ON DELETE CASCADE,
+  file_path TEXT NOT NULL,
+  original_name TEXT,
+  mime_type TEXT,
+  file_size INTEGER,
+  diary_page TEXT,
+  notes TEXT,
+  uploaded_by TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_diary_scans_worker ON worker_diary_scans(business_id, worker_id, created_at DESC);
 `;
 

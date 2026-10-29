@@ -171,7 +171,15 @@ export const VendorService = {
       const allVendors = db.prepare(nameQuery).all(...params);
       for (const v of allVendors) {
         const vNorm = normalizeString(v.name);
-        if (vNorm === normalizedName || (vNorm.length > 4 && (vNorm.includes(normalizedName) || normalizedName.includes(vNorm)))) {
+        const stopWords = ['agency', 'agencies', 'trader', 'traders', 'trading', 'enterprise', 'enterprises', 'foods', 'store', 'stores', 'sales', 'mart', 'services'];
+        const isGeneric = stopWords.includes(normalizedName) || stopWords.includes(vNorm);
+        const isMatch = vNorm === normalizedName || (
+          !isGeneric &&
+          vNorm.length >= 6 &&
+          normalizedName.length >= 6 &&
+          (vNorm.includes(normalizedName) || normalizedName.includes(vNorm))
+        );
+        if (isMatch) {
           if (matchesMap.has(v.id)) {
             if (!matchesMap.get(v.id).matchedFields.includes('name')) {
               matchesMap.get(v.id).matchedFields.push('name');
@@ -345,7 +353,7 @@ export const VendorService = {
 
     if (!vendor) return null;
 
-    // Get associated bills
+    // Get associated bills (deduplicating attachments so each bill returns exactly 1 row)
     const bills = db.prepare(`
       SELECT 
         b.*,
@@ -355,7 +363,9 @@ export const VendorService = {
         a.file_size_bytes,
         u.full_name as created_by_name
       FROM vendor_bills b
-      LEFT JOIN bill_attachments a ON a.bill_id = b.id
+      LEFT JOIN bill_attachments a ON a.id = (
+        SELECT ba.id FROM bill_attachments ba WHERE ba.bill_id = b.id ORDER BY ba.created_at ASC LIMIT 1
+      )
       LEFT JOIN users u ON u.id = b.created_by
       WHERE b.vendor_id = ? AND b.business_id = ?
       ORDER BY b.bill_date DESC, b.created_at DESC
@@ -617,6 +627,73 @@ export const VendorService = {
     }
 
     return db.transaction(() => {
+      // Check if bill already exists for this expense_id
+      if (billData.expense_id) {
+        const existing = db.prepare('SELECT id FROM vendor_bills WHERE expense_id = ?').get(billData.expense_id);
+        if (existing) {
+          db.prepare(`
+            UPDATE vendor_bills SET
+              vendor_id = ?, bill_number = COALESCE(?, bill_number), bill_date = COALESCE(?, bill_date),
+              due_date = ?, po_number = ?, subtotal = ?, taxable_amount = ?,
+              cgst = ?, sgst = ?, igst = ?, other_charges = ?, discount = ?,
+              total_amount = ?, payment_status = ?, paid_amount = ?, notes = ?,
+              ocr_status = ?, ocr_raw_text = ?, ocr_confidence = ?, updated_at = ?
+            WHERE id = ?
+          `).run(
+            vendorId,
+            billData.bill_number ? billData.bill_number.trim() : null,
+            billData.bill_date ? billData.bill_date.trim() : null,
+            billData.due_date ? billData.due_date.trim() : null,
+            billData.po_number ? billData.po_number.trim() : null,
+            subtotal,
+            taxableAmount,
+            cgst,
+            sgst,
+            igst,
+            otherCharges,
+            discount,
+            totalAmount,
+            paymentStatus,
+            paidAmount,
+            billData.notes ? billData.notes.trim() : null,
+            billData.ocr_status || 'manual',
+            billData.ocr_raw_text || null,
+            billData.ocr_confidence ? Number(billData.ocr_confidence) : null,
+            now,
+            existing.id
+          );
+
+          if (file) {
+            const existingAtt = db.prepare(`
+              SELECT id FROM bill_attachments 
+              WHERE bill_id = ? AND (storage_key = ? OR original_filename = ?)
+            `).get(existing.id, file.filename, file.originalname);
+
+            if (!existingAtt) {
+              const attachmentId = 'bat_' + crypto.randomUUID();
+              db.prepare(`
+                INSERT INTO bill_attachments (
+                  id, business_id, bill_id, storage_key, original_filename,
+                  content_type, file_size_bytes, uploaded_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              `).run(
+                attachmentId,
+                businessId,
+                existing.id,
+                file.filename,
+                file.originalname,
+                file.mimetype,
+                file.size,
+                user.id,
+                now
+              );
+            }
+          }
+
+          return db.prepare('SELECT * FROM vendor_bills WHERE id = ?').get(existing.id);
+        }
+      }
+
       // 1. Insert bill
       db.prepare(`
         INSERT INTO vendor_bills (

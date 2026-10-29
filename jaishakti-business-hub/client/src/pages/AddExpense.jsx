@@ -43,7 +43,10 @@ import {
   ChevronUp,
   X,
   Camera,
-  Loader2
+  Loader2,
+  Banknote,
+  Smartphone,
+  Landmark
 } from 'lucide-react';
 
 const ICON_MAP = {
@@ -88,11 +91,18 @@ export const APPROVED_CATEGORY_CODES = [
   'electricity_utilities'
 ];
 
-function SearchableCategoryDropdown({ categories, categoryId, onSelect, lang, t }) {
+const PAYMENT_METHODS = [
+  { id: 'cash', labelKey: 'pm_cash', icon: Banknote },
+  { id: 'upi', labelKey: 'pm_upi', icon: Smartphone },
+  { id: 'bank_transfer', labelKey: 'pm_bank_transfer', icon: Landmark },
+  { id: 'credit', labelKey: 'pm_credit', icon: Clock },
+  { id: 'card', labelKey: 'pm_card', icon: CreditCard },
+  { id: 'other', labelKey: 'pm_other', icon: MoreHorizontal }
+];
+
+function PaymentMethodDropdown({ paymentMethod, onSelect, lang, t }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [search, setSearch] = useState('');
   const dropdownRef = useRef(null);
-  const searchInputRef = useRef(null);
 
   useEffect(() => {
     function handleClickOutside(event) {
@@ -113,30 +123,11 @@ function SearchableCategoryDropdown({ categories, categoryId, onSelect, lang, t 
     };
   }, []);
 
-  useEffect(() => {
-    if (isOpen) {
-      setTimeout(() => searchInputRef.current?.focus(), 60);
-    } else {
-      setSearch('');
-    }
-  }, [isOpen]);
-
-  const selectedCategory = categories.find(c => c.id === categoryId) || categories[0];
-  const SelectedIcon = selectedCategory ? (ICON_MAP[selectedCategory.icon] || Tag) : Tag;
-
-  const filteredCategories = categories.filter(cat => {
-    if (!search.trim()) return true;
-    const q = search.toLowerCase().trim();
-    return (
-      (cat.name_en && cat.name_en.toLowerCase().includes(q)) ||
-      (cat.name_gu && cat.name_gu.toLowerCase().includes(q)) ||
-      (cat.code && cat.code.toLowerCase().includes(q))
-    );
-  });
+  const selectedMethod = PAYMENT_METHODS.find(m => m.id === paymentMethod) || PAYMENT_METHODS[0];
+  const SelectedIcon = selectedMethod.icon;
 
   return (
     <div className="relative" ref={dropdownRef}>
-      {/* 1. Only ONE item visible: Logo and Title in the same line */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
@@ -148,16 +139,9 @@ function SearchableCategoryDropdown({ categories, categoryId, onSelect, lang, t 
           <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-700 border border-amber-200/80 flex items-center justify-center shrink-0">
             <SelectedIcon className="w-4 h-4" />
           </div>
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-sm font-bold text-slate-900 truncate">
-              {selectedCategory ? (lang === 'gu' ? selectedCategory.name_gu : selectedCategory.name_en) : t('lbl_category')}
-            </span>
-            {selectedCategory && (
-              <span className="text-xs text-slate-400 font-medium truncate hidden sm:inline">
-                ({lang === 'gu' ? selectedCategory.name_en : selectedCategory.name_gu})
-              </span>
-            )}
-          </div>
+          <span className="text-sm font-bold text-slate-900 truncate">
+            {t(selectedMethod.labelKey)}
+          </span>
         </div>
         <div className="flex items-center gap-2 text-slate-400 pl-2 shrink-0">
           <span className="text-[11px] font-semibold text-amber-800 bg-amber-100/70 px-2 py-0.5 rounded-full border border-amber-200/60 hidden xs:inline">
@@ -167,99 +151,65 @@ function SearchableCategoryDropdown({ categories, categoryId, onSelect, lang, t 
         </div>
       </button>
 
-      {/* 2. Expanded Searchable Dropdown */}
       {isOpen && (
-        <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden animate-fade-in">
-          {/* Search Box Header */}
-          <div className="p-2.5 border-b border-slate-100 bg-slate-50/70">
-            <div className="relative">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                ref={searchInputRef}
-                type="text"
-                placeholder={lang === 'gu' ? 'કેટેગરી શોધો (ચા, તેલ, શાકભાજી...)' : 'Search category (tea, oil, vegetable...)'}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-full pl-9 pr-8 py-2 text-xs bg-white rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-              />
-              {search && (
-                <button
-                  type="button"
-                  onClick={() => setSearch('')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Vertical Scroll Option List */}
-          <div className="max-h-56 overflow-y-auto p-1.5 space-y-1">
-            {filteredCategories.length > 0 ? (
-              filteredCategories.map((cat) => {
-                const IconComponent = ICON_MAP[cat.icon] || Tag;
-                const isSelected = categoryId === cat.id;
-                return (
-                  <button
-                    key={cat.id}
-                    type="button"
-                    onClick={() => {
-                      onSelect(cat.id);
-                      setIsOpen(false);
-                    }}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition text-left ${
-                      isSelected
-                        ? 'bg-amber-500 text-white shadow-xs font-bold'
-                        : 'hover:bg-amber-50 text-slate-700 bg-white'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-                        isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-amber-700'
-                      }`}>
-                        <IconComponent className="w-4 h-4" />
-                      </div>
-                      <div className="truncate">
-                        <span className="font-bold">{lang === 'gu' ? cat.name_gu : cat.name_en}</span>
-                        <span className={`text-[11px] ml-2 ${isSelected ? 'text-white/80' : 'text-slate-400'}`}>
-                          ({lang === 'gu' ? cat.name_en : cat.name_gu})
-                        </span>
-                      </div>
-                    </div>
-                    {isSelected && <Check className="w-4 h-4 shrink-0 ml-1.5 text-white" />}
-                  </button>
-                );
-              })
-            ) : (
-              <div className="py-4 text-center text-xs text-slate-400">
-                {lang === 'gu' ? 'કોઈ કેટેગરી મળી નથી' : 'No matching category'}
-              </div>
-            )}
-          </div>
+        <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden animate-fade-in p-1.5 space-y-1">
+          {PAYMENT_METHODS.map((pm) => {
+            const IconComp = pm.icon;
+            const isSelected = paymentMethod === pm.id;
+            return (
+              <button
+                key={pm.id}
+                type="button"
+                onClick={() => {
+                  onSelect(pm.id);
+                  setIsOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition text-left ${
+                  isSelected
+                    ? 'bg-amber-500 text-white shadow-xs font-bold'
+                    : 'hover:bg-amber-50 text-slate-700 bg-white'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                    isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-amber-700'
+                  }`}>
+                    <IconComp className="w-4 h-4" />
+                  </div>
+                  <span className="truncate font-bold">{t(pm.labelKey)}</span>
+                </div>
+                {isSelected && <Check className="w-4 h-4 shrink-0 ml-1.5 text-white" />}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
-export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
+export function AddExpense({ onSaved, initialValues = null, onOpenVoice, onClearInitialValues }) {
   const { lang, t, formatINR, formatDate } = useLanguage();
   const { user } = useAuth();
 
   const [mode, setMode] = useState('quick'); // 'quick' | 'detailed'
   const [categories, setCategories] = useState([]);
   const [vendors, setVendors] = useState([]);
+  const [workers, setWorkers] = useState([]);
   const [loadingInitial, setLoadingInitial] = useState(true);
 
   // Form State
   const [categoryId, setCategoryId] = useState('');
+  const [isManualCategorySelect, setIsManualCategorySelect] = useState(false);
   const [amount, setAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [paymentStatus, setPaymentStatus] = useState('paid');
   const [paidAmount, setPaidAmount] = useState('');
   const [transactionDate, setTransactionDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [vendorId, setVendorId] = useState('');
+  const [workerId, setWorkerId] = useState('');
+  const [autoMatchedWorker, setAutoMatchedWorker] = useState(null);
+  const [isManualWorkerSelect, setIsManualWorkerSelect] = useState(false);
   const [description, setDescription] = useState('');
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [referenceNumber, setReferenceNumber] = useState('');
@@ -279,6 +229,7 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
   // Submission State
   const [submitting, setSubmitting] = useState(false);
   const [successResult, setSuccessResult] = useState(null);
+  const [successKhataNotice, setSuccessKhataNotice] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
 
   // Quick Add Vendor Modal
@@ -289,19 +240,29 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
   useEffect(() => {
     async function loadData() {
       try {
-        const [catRes, venRes] = await Promise.all([
+        const [catRes, venRes, wrkRes] = await Promise.all([
           apiFetch('/api/categories'),
-          apiFetch('/api/vendors')
+          apiFetch('/api/vendors'),
+          apiFetch('/api/workers')
         ]);
         if (catRes.categories) {
-          const approved = catRes.categories.filter(c => APPROVED_CATEGORY_CODES.includes(c.code));
-          setCategories(approved);
+          const active = catRes.categories.filter(c => c.is_active !== 0);
+          active.sort((a, b) => {
+            const indexA = APPROVED_CATEGORY_CODES.indexOf(a.code);
+            const indexB = APPROVED_CATEGORY_CODES.indexOf(b.code);
+            if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+            if (indexA !== -1) return -1;
+            if (indexB !== -1) return 1;
+            return (a.sort_order || 99) - (b.sort_order || 99);
+          });
+          setCategories(active);
           // Pre-select first category if none selected
-          if (approved.length > 0 && !categoryId) {
-            setCategoryId(approved[0].id);
+          if (active.length > 0 && !categoryId) {
+            setCategoryId(active[0].id);
           }
         }
         if (venRes.vendors) setVendors(venRes.vendors);
+        if (wrkRes.workers) setWorkers(wrkRes.workers.filter(w => w.is_active));
       } catch (e) {
         console.error('Failed to load form prerequisites:', e);
       } finally {
@@ -311,14 +272,133 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
     loadData();
   }, []);
 
+  // Worker name rectification & matching helper
+  const matchWorkerFromText = (text, workersList) => {
+    if (!text || typeof text !== 'string' || !workersList || !workersList.length) return null;
+    const clean = text.toLowerCase()
+      .replace(/[0-9]/g, ' ')
+      .replace(/\b(upad|advance|cash|paid|pay|rs|inr|salary|wage|bhai|ben|maharaj|katila|karigar)\b/gi, ' ')
+      .replace(/(ઉપાડ|એડવાન્સ|રોકડ|રોકડા|રૂપિયા|પગાર|ભાઈ|બેન|મહારાજ|કારીગર|કાતીલા|આપ્યા|આપ્યો)/g, ' ')
+      .trim();
+
+    const tokens = clean.split(/[\s,()/-]+/).filter(t => t.length >= 2);
+    if (tokens.length === 0) return null;
+
+    for (const w of workersList) {
+      const wLower = (w.name || '').toLowerCase();
+      const wParts = wLower.split(/[\s,()/-]+/).filter(p => p.length >= 2);
+      for (const tok of tokens) {
+        const isMatch = wParts.some(p => p.includes(tok) || tok.includes(p) || (p.length >= 3 && tok.length >= 3 && (p.startsWith(tok.slice(0, 3)) || tok.startsWith(p.slice(0, 3)))));
+        if (isMatch) return w;
+      }
+    }
+    return null;
+  };
+
+  const [autoDetectedCategory, setAutoDetectedCategory] = useState(null);
+
+  const selectedCategory = categories.find(c => c.id === categoryId);
+  const isWorkerCategory = selectedCategory && (
+    selectedCategory.code === 'worker_advance_upad' ||
+    selectedCategory.code === 'worker_wages' ||
+    selectedCategory.classification === 'people_wages'
+  );
+
+  const isVendorCategory = selectedCategory && [
+    'raw_materials',
+    'vegetable_purchase',
+    'packaging_materials',
+    'finished_goods',
+    'repairs_maintenance',
+    'cleaning_supplies'
+  ].includes(selectedCategory.code);
+
+  // Smart auto-rectify/match worker and category whenever description changes
+  useEffect(() => {
+    if (!description || typeof description !== 'string') return;
+    const trimmed = description.trim();
+    if (trimmed.length < 2) return;
+
+    // 1. Worker Detection: check if any worker name or upad keyword is typed
+    if (workers.length > 0 && !isManualWorkerSelect) {
+      const matchedWorker = matchWorkerFromText(trimmed, workers);
+      const isUpadKeyword = /\b(upad|advance|karigar|katila|maharaj|કારીગર|ઉપાડ|એડવાન્સ|કાતીલા|મહારાજ|પગાર)\b/i.test(trimmed);
+
+      if (matchedWorker || isUpadKeyword) {
+        const workerCat = categories.find(c => c.code === 'worker_advance_upad');
+        if (workerCat && categoryId !== workerCat.id) {
+          setCategoryId(workerCat.id);
+          setAutoDetectedCategory(workerCat);
+        }
+        if (matchedWorker) {
+          setWorkerId(matchedWorker.id);
+          setAutoMatchedWorker(matchedWorker);
+        }
+        return;
+      }
+    }
+
+    // 2. Category Keyword Auto-Detection if not manual worker select
+    if (!isManualWorkerSelect && !isManualCategorySelect) {
+      const lower = trimmed.toLowerCase();
+      let suggestedCode = null;
+
+      if (/packag|box|pouch|bag|carton|bardana|પેકિંગ|બોક્સ|કોથળી/i.test(lower)) {
+        suggestedCode = 'packaging_materials';
+      } else if (/finished|khakhra|farsan|sweet|snack|gathiya|sev|chavanu|thepla|થેપલા|તૈયાર|ખાખરા/i.test(lower)) {
+        suggestedCode = 'finished_goods';
+      } else if (/vegetable|potato|onion|tomato|ginger|chilli|bataka|dungri|shakbhaji|શાકભાજી|બટાકા|ડુંગળી/i.test(lower)) {
+        suggestedCode = 'vegetable_purchase';
+      } else if (/clean|detergent|soap|acid|phenyl|wipe|સફાઈ|સાબુ|ફિનાઈલ/i.test(lower)) {
+        suggestedCode = 'cleaning_supplies';
+      } else if (/electric|power|lpg|gas|cylinder|utility|torrent|ugvcl|pgvcl|વીજળી|ગેસ|લાઇટ/i.test(lower)) {
+        suggestedCode = 'electricity_utilities';
+      } else if (/repair|maint|spare|machine|welding|grease|bearing|સમારકામ|રીપેરીંગ/i.test(lower)) {
+        suggestedCode = 'repairs_maintenance';
+      } else if (/transport|delivery|freight|tempo|rickshaw|cartage|ટ્રાન્સપોર્ટ|ભાડું|ટેમ્પો|રિક્ષા/i.test(lower)) {
+        suggestedCode = 'transport_delivery';
+      } else if (/tea|coffee|milk|snack|refreshment|ચા|નાસ્તો|દૂધ|કોફી/i.test(lower)) {
+        suggestedCode = 'tea_refreshment';
+      } else if (/besan|maida|oil|tel|singtel|sugar|khand|flour|તેલ|લોટ|બેસન|ખાંડ|મેંદો|સીંગતેલ/i.test(lower)) {
+        suggestedCode = 'raw_materials';
+      }
+
+      if (suggestedCode) {
+        const foundCat = categories.find(c => c.code === suggestedCode);
+        if (foundCat && categoryId !== foundCat.id) {
+          setCategoryId(foundCat.id);
+          setAutoDetectedCategory(foundCat);
+        }
+      }
+    }
+  }, [description, workers, categories, isManualWorkerSelect, isManualCategorySelect]);
+
+  // Keep worker matched if user switches into worker category manually
+  useEffect(() => {
+    if (isWorkerCategory && !isManualWorkerSelect && workers.length > 0 && !workerId) {
+      const matched = matchWorkerFromText(description, workers);
+      if (matched) {
+        setWorkerId(matched.id);
+        setAutoMatchedWorker(matched);
+      }
+    }
+  }, [isWorkerCategory, isManualWorkerSelect, workers, description, workerId]);
+
   // Sync initial values if passed from voice modal
   useEffect(() => {
     if (initialValues) {
-      if (initialValues.category_id) setCategoryId(initialValues.category_id);
+      if (initialValues.category_id) {
+        setCategoryId(initialValues.category_id);
+        setIsManualCategorySelect(true);
+      }
       if (initialValues.amount) setAmount(String(initialValues.amount));
       if (initialValues.payment_method) setPaymentMethod(initialValues.payment_method);
       if (initialValues.transaction_date) setTransactionDate(initialValues.transaction_date);
       if (initialValues.vendor_id) setVendorId(initialValues.vendor_id);
+      if (initialValues.worker_id) {
+        setWorkerId(initialValues.worker_id);
+        setIsManualWorkerSelect(true);
+      }
       if (initialValues.description) setDescription(initialValues.description);
     }
   }, [initialValues]);
@@ -566,9 +646,11 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
     e.preventDefault();
     setErrorMessage('');
     setSuccessResult(null);
+    setSuccessKhataNotice(null);
 
     // Validation
-    const num = parseFloat(amount);
+    const cleanAmount = typeof amount === 'string' ? amount.replace(/,/g, '').trim() : String(amount);
+    const num = parseFloat(cleanAmount);
     if (isNaN(num) || num <= 0) {
       setErrorMessage(lang === 'gu' ? 'કૃપા કરીને સાચી રકમ લખો (૦ થી વધુ).' : 'Please enter a valid positive amount.');
       return;
@@ -576,6 +658,31 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
 
     if (!categoryId) {
       setErrorMessage(lang === 'gu' ? 'કૃપા કરીને કેટેગરી પસંદ કરો.' : 'Please select an expense category.');
+      return;
+    }
+
+    if (paymentStatus === 'partially_paid') {
+      const cleanPaid = typeof paidAmount === 'string' ? paidAmount.replace(/,/g, '').trim() : String(paidAmount);
+      const pNum = parseFloat(cleanPaid);
+      if (isNaN(pNum) || pNum <= 0) {
+        setErrorMessage(lang === 'gu' ? 'કૃપા કરીને ચૂકવેલ રકમ લખો.' : 'Please enter the paid amount.');
+        return;
+      }
+      if (pNum >= num) {
+        setErrorMessage(lang === 'gu' ? 'ચૂકવેલ રકમ કુલ રકમ કરતાં ઓછી હોવી જોઈએ.' : 'Paid amount must be less than total amount for partial payment.');
+        return;
+      }
+    }
+
+    // Resolve final worker id
+    let finalWorkerId = workerId;
+    if (isWorkerCategory && !finalWorkerId) {
+      const autoM = matchWorkerFromText(description, workers);
+      if (autoM) finalWorkerId = autoM.id;
+    }
+
+    if (isWorkerCategory && !finalWorkerId) {
+      setErrorMessage(lang === 'gu' ? 'કૃપા કરીને કારીગર પસંદ કરો.' : 'Please select the worker receiving this advance.');
       return;
     }
 
@@ -587,12 +694,16 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
         // Send multipart form-data
         const formData = new FormData();
         formData.append('category_id', categoryId);
-        formData.append('amount', amount);
+        formData.append('amount', cleanAmount);
         formData.append('payment_method', paymentMethod);
         formData.append('payment_status', paymentStatus);
         if (paymentStatus === 'partially_paid') formData.append('paid_amount', paidAmount);
         formData.append('transaction_date', transactionDate);
-        if (vendorId) formData.append('vendor_id', vendorId);
+        if (isWorkerCategory && finalWorkerId) {
+          formData.append('worker_id', finalWorkerId);
+        } else if (vendorId) {
+          formData.append('vendor_id', vendorId);
+        }
         if (description) formData.append('description', description);
         if (invoiceNumber) formData.append('invoice_number', invoiceNumber);
         if (referenceNumber) formData.append('reference_number', referenceNumber);
@@ -620,7 +731,8 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
             payment_status: paymentStatus,
             paid_amount: paymentStatus === 'partially_paid' ? parseFloat(paidAmount) : undefined,
             transaction_date: transactionDate,
-            vendor_id: vendorId || null,
+            vendor_id: isWorkerCategory ? null : (vendorId || null),
+            worker_id: isWorkerCategory ? finalWorkerId : null,
             description: description || null,
             invoice_number: invoiceNumber || null,
             reference_number: referenceNumber || null,
@@ -634,10 +746,23 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
       }
 
       setSuccessResult(res.expense);
+      if (isWorkerCategory && finalWorkerId) {
+        const wrk = workers.find(w => w.id === finalWorkerId);
+        setSuccessKhataNotice(
+          lang === 'gu'
+            ? `✓ ખર્ચ ₹${num} સેવ થયો અને કારીગર ${wrk ? wrk.name : ''} ના ખાતાવહીમાં ઉપાડ જમા થયો!`
+            : `✓ Expense ₹${num} saved & advance logged into ${wrk ? wrk.name : 'worker'}'s Khata Book!`
+        );
+      }
 
       // Offer immediate "Add Another" while keeping category for rapid repetition
       setAmount('');
       setDescription('');
+      setVendorId('');
+      setWorkerId('');
+      setAutoMatchedWorker(null);
+      setIsManualWorkerSelect(false);
+      setIsManualCategorySelect(false);
       setInvoiceNumber('');
       setReferenceNumber('');
       setNotes('');
@@ -651,7 +776,9 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
       setPaidAmount('');
       setPaymentStatus('paid');
 
-      if (onSaved) onSaved(res.expense);
+      if (onClearInitialValues) {
+        onClearInitialValues();
+      }
     } catch (err) {
       if (err.message && (err.message.includes('already been recorded') || err.message.includes('DUPLICATE_EXPENSE'))) {
         setErrorMessage(
@@ -667,10 +794,65 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
     }
   };
 
-  const selectedCategory = categories.find(c => c.id === categoryId);
-
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      {/* Hidden File and Camera Inputs - Using offscreen layout to protect iOS WebKit presentation flow */}
+      <input
+        id="add_expense_file_input"
+        ref={fileInputRef}
+        type="file"
+        accept="image/*,application/pdf"
+        style={{
+          position: 'absolute',
+          width: '1px',
+          height: '1px',
+          padding: 0,
+          margin: '-1px',
+          overflow: 'hidden',
+          clip: 'rect(0, 0, 0, 0)',
+          border: 0,
+          opacity: 0,
+          pointerEvents: 'none'
+        }}
+        onClick={(e) => {
+          e.target.value = '';
+        }}
+        onChange={(e) => {
+          if (e.target.files && e.target.files[0]) {
+            handleScanReceipt(e.target.files[0]);
+            e.target.value = '';
+          }
+        }}
+      />
+      <input
+        id="add_expense_camera_input"
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        style={{
+          position: 'absolute',
+          width: '1px',
+          height: '1px',
+          padding: 0,
+          margin: '-1px',
+          overflow: 'hidden',
+          clip: 'rect(0, 0, 0, 0)',
+          border: 0,
+          opacity: 0,
+          pointerEvents: 'none'
+        }}
+        onClick={(e) => {
+          e.target.value = '';
+        }}
+        onChange={(e) => {
+          if (e.target.files && e.target.files[0]) {
+            handleScanReceipt(e.target.files[0]);
+            e.target.value = '';
+          }
+        }}
+      />
+
       {/* Top Header & Mode Toggle */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-sm">
         <div>
@@ -684,12 +866,37 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Choose File (OCR) */}
+          <label
+            htmlFor="add_expense_file_input"
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 active:scale-[0.98] text-white text-xs font-bold shadow-xs shadow-amber-500/20 transition cursor-pointer select-none ${scanning ? 'opacity-50 pointer-events-none' : ''}`}
+            title={lang === 'gu' ? 'બિલ સ્કેન કરો (OCR)' : 'Scan Bill with OCR'}
+          >
+            {scanning ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Upload className="w-3.5 h-3.5" />
+            )}
+            <span>{t('btn_choose_file')}</span>
+          </label>
+
+          {/* Take Photo (OCR - Direct Native Camera) */}
+          <button
+            type="button"
+            onClick={() => cameraInputRef.current?.click()}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white hover:bg-slate-50 active:scale-[0.98] text-slate-700 text-xs font-bold border border-slate-300 shadow-xs transition cursor-pointer select-none ${scanning ? 'opacity-50 pointer-events-none' : ''}`}
+            title={lang === 'gu' ? 'કેમેરાથી બિલનો ફોટો પાડો' : 'Take photo of bill'}
+          >
+            <Camera className="w-3.5 h-3.5 text-slate-500" />
+            <span>{t('btn_take_photo')}</span>
+          </button>
+
           {/* Voice button */}
           <button
             type="button"
             onClick={onOpenVoice}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold border border-amber-200 transition"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold border border-amber-200 transition cursor-pointer"
           >
             <Mic className="w-4 h-4 text-amber-600" />
             <span>{t('btn_voice_entry')}</span>
@@ -699,7 +906,7 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
           <button
             type="button"
             onClick={() => setMode(mode === 'quick' ? 'detailed' : 'quick')}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
           >
             {mode === 'quick' ? (
               <>
@@ -716,6 +923,169 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
         </div>
       </div>
 
+      {/* Active OCR Scanning Banner */}
+      {scanning && (
+        <div className="p-4 bg-amber-50/80 rounded-2xl border border-amber-300 shadow-xs flex items-center gap-3 animate-pulse">
+          <Loader2 className="w-6 h-6 text-amber-600 animate-spin shrink-0" />
+          <div className="min-w-0">
+            <p className="text-xs sm:text-sm font-bold text-slate-900">{t('lbl_analyzing_bill')}</p>
+            <p className="text-[11px] text-slate-600 mt-0.5">{t('lbl_extracting_items')}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Attached Receipt / Scanned File Preview Banner */}
+      {receiptFile && !scanning && (
+        <div className="p-3.5 sm:p-4 bg-amber-50/60 rounded-2xl border border-amber-300/80 shadow-xs flex items-center justify-between gap-3 animate-fade-in">
+          <div className="flex items-center gap-3 min-w-0">
+            {previewUrl ? (
+              <img
+                src={previewUrl}
+                alt="Receipt preview"
+                className="w-12 h-12 object-cover rounded-xl border border-amber-200 shrink-0 bg-white shadow-xs"
+              />
+            ) : (
+              <div className="w-12 h-12 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0 border border-amber-200">
+                <FileText className="w-6 h-6" />
+              </div>
+            )}
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-900 truncate max-w-[200px] sm:max-w-xs">
+                  {receiptFile.name}
+                </span>
+                <span className="text-[10px] text-emerald-800 font-bold bg-emerald-100 px-2 py-0.5 rounded-full shrink-0 flex items-center gap-1">
+                  <Check className="w-3 h-3 text-emerald-600" />
+                  <span>{lang === 'gu' ? 'જોડાયેલ' : 'Attached'}</span>
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {(receiptFile.size / 1024).toFixed(0)} KB • {lang === 'gu' ? 'બિલ સ્કેન સફળ' : 'OCR Decoded'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="px-3 py-1.5 text-xs font-bold text-amber-900 bg-white border border-amber-300 rounded-xl hover:bg-amber-100/50 transition shadow-2xs cursor-pointer"
+            >
+              {lang === 'gu' ? 'બદલો' : 'Change'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setReceiptFile(null);
+                setStoredFileInfo(null);
+                if (previewUrl) URL.revokeObjectURL(previewUrl);
+                setPreviewUrl(null);
+                setDecodedItems([]);
+                setScanMessage(null);
+                setDuplicateExpense(null);
+              }}
+              className="px-3 py-1.5 text-xs font-semibold text-red-600 hover:text-red-700 bg-white border border-red-200 rounded-xl hover:bg-red-50 transition shadow-2xs cursor-pointer"
+            >
+              {lang === 'gu' ? 'દૂર કરો' : 'Remove'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Duplicate Expense Warning Banner */}
+      {duplicateExpense && (
+        <div className="p-4 rounded-xl border border-red-300 bg-red-50 text-red-900 flex items-start gap-3 shadow-sm animate-fade-in">
+          <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+          <div className="flex-1 text-xs sm:text-sm">
+            <div className="font-bold text-red-800 text-sm sm:text-base flex items-center gap-1.5">
+              <span>{t('msg_duplicate_expense_title')}</span>
+            </div>
+            <p className="mt-1 text-red-700 leading-relaxed">
+              {lang === 'gu'
+                ? `આ બિલ/ખર્ચ પહેલેથી જ તારીખ ${formatDate(duplicateExpense.transaction_date)} ના રોજ નોંધાઈ ગયો છે (ઇન્વોઇસ #${duplicateExpense.invoice_number || 'N/A'}, રકમ ${formatINR(duplicateExpense.amount)}, રેફરન્સ: ${duplicateExpense.transaction_number}). ડુપ્લિકેટ એન્ટ્રી મંજૂર નથી.`
+                : `An expense for this bill has already been recorded on ${formatDate(duplicateExpense.transaction_date)} (Invoice #${duplicateExpense.invoice_number || 'N/A'}, Amount ${formatINR(duplicateExpense.amount)}, Ref: ${duplicateExpense.transaction_number}). Duplicate entries are not permitted.`}
+            </p>
+            <div className="mt-2 text-xs font-bold text-red-700 bg-white/80 inline-block px-2.5 py-1 rounded-md border border-red-200">
+              {t('btn_duplicate_blocked')}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Scan Feedback Banner */}
+      {scanMessage && !duplicateExpense && (
+        <div className={`p-3.5 rounded-2xl border text-xs flex items-start gap-2.5 animate-fade-in shadow-xs ${
+          scanMessage.type === 'success'
+            ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+            : 'bg-amber-50 text-amber-900 border-amber-200'
+        }`}>
+          {scanMessage.type === 'success' ? (
+            <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+          ) : (
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="font-bold">{scanMessage.text}</p>
+            {scanMessage.details && (
+              <p className="text-[11px] opacity-80 mt-0.5">{scanMessage.details}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setScanMessage(null)}
+            className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Decoded Items Display */}
+      {decodedItems.length > 0 && (
+        <div className="bg-gradient-to-r from-amber-50 to-amber-100/60 p-4 rounded-3xl border-2 border-amber-300 shadow-sm space-y-3 animate-fade-in">
+          <div className="flex items-center justify-between text-xs font-black text-amber-950">
+            <span className="flex items-center gap-2 text-sm">
+              <Sparkles className="w-4 h-4 text-amber-600" />
+              <span>{lang === 'gu' ? 'બિલમાંથી ઓળખાયેલ વસ્તુઓની વિગત (Decoded Particulars)' : 'Decoded Bill Particulars & Items'} ({decodedItems.length})</span>
+            </span>
+            <span className="text-[11px] text-amber-900 font-bold bg-amber-200/80 px-2.5 py-0.5 rounded-full border border-amber-300">
+              {lang === 'gu' ? 'નોંધમાં આપોઆપ ઉમેરાઈ ગયું' : 'Auto-filled into notes & description'}
+            </span>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-amber-200 overflow-hidden shadow-xs">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-amber-100/70 text-amber-950 font-black border-b border-amber-200">
+                <tr>
+                  <th className="p-2.5">Particulars (વસ્તુ)</th>
+                  <th className="p-2.5 w-24">Qty (જથ્થો)</th>
+                  <th className="p-2.5 w-28">Rate (ભાવ)</th>
+                  <th className="p-2.5 w-28 text-right">Amount (રકમ)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {decodedItems.map((item, idx) => (
+                  <tr key={idx} className="hover:bg-amber-50/40">
+                    <td className="p-2.5 font-bold text-slate-800">
+                      {item.description}
+                    </td>
+                    <td className="p-2.5 font-bold text-amber-900">
+                      {item.quantity ? `${item.quantity} ${item.unit || ''}` : '—'}
+                    </td>
+                    <td className="p-2.5 text-slate-600">
+                      {item.rate ? `₹${item.rate}` : '—'}
+                    </td>
+                    <td className="p-2.5 text-right font-black text-slate-900">
+                      {item.amount ? `₹${item.amount}` : (item.rate && item.quantity ? `₹${(parseFloat(item.rate) * parseFloat(item.quantity)).toFixed(2)}` : '—')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Success Banner */}
       {successResult && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fade-in shadow-sm">
@@ -731,14 +1101,31 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
                 {successResult.transaction_number} • {formatINR(successResult.amount)} •{' '}
                 <span className="capitalize font-semibold">{t(`as_${successResult.approval_status}`)}</span>
               </div>
+              {successKhataNotice && (
+                <div className="text-xs font-bold text-emerald-900 mt-1.5 bg-emerald-100/90 px-2.5 py-1 rounded-lg border border-emerald-300 inline-block shadow-xs">
+                  {successKhataNotice}
+                </div>
+              )}
             </div>
           </div>
-          <button
-            onClick={() => setSuccessResult(null)}
-            className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition self-end sm:self-auto"
-          >
-            {t('btn_add_another')}
-          </button>
+          <div className="flex items-center gap-2 self-end sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setSuccessResult(null)}
+              className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition cursor-pointer shadow-xs"
+            >
+              + {t('btn_add_another')}
+            </button>
+            {onSaved && (
+              <button
+                type="button"
+                onClick={() => onSaved(successResult)}
+                className="px-4 py-2 bg-white border border-emerald-300 hover:bg-emerald-100/60 text-emerald-900 rounded-xl text-xs font-bold transition cursor-pointer shadow-2xs"
+              >
+                {lang === 'gu' ? 'ડેશબોર્ડ પર જાઓ' : 'Go to Dashboard'}
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -756,9 +1143,17 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
         <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/80 shadow-sm space-y-4">
           {/* 1. Title / Note of Expense */}
           <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-              {t('lbl_expense_title')}
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
+                {t('lbl_expense_title')}
+              </label>
+              {autoMatchedWorker && (
+                <span className="text-[11px] font-bold text-amber-950 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-300 flex items-center gap-1 shadow-2xs animate-fade-in">
+                  <Users className="w-3.5 h-3.5 text-amber-700" />
+                  <span>{lang === 'gu' ? `ઓળખાયેલ: ${autoMatchedWorker.name.split(' ')[0]} (ઉપાડ)` : `Karigar: ${autoMatchedWorker.name.split(' ')[0]} (Upad)`}</span>
+                </span>
+              )}
+            </div>
             <input
               type="text"
               placeholder={t('lbl_expense_title_placeholder')}
@@ -769,21 +1164,165 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
             />
           </div>
 
-          {/* 2. Category of Expense (Compact single line when closed, clickable with search & vertical scroll) */}
+          {/* 2. Expense Category (1-Tap Selection Grid) */}
           <div className="space-y-1.5">
             <label className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
               <span>{t('lbl_category')}</span>
               <span className="text-amber-500">*</span>
             </label>
 
-            <SearchableCategoryDropdown
-              categories={categories.filter(c => APPROVED_CATEGORY_CODES.includes(c.code))}
-              categoryId={categoryId}
-              onSelect={(id) => setCategoryId(id)}
-              lang={lang}
-              t={t}
-            />
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+              {categories.map((cat) => {
+                const isSelected = categoryId === cat.id;
+                const IconComp = ICON_MAP[cat.icon] || Tag;
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => {
+                      setCategoryId(cat.id);
+                      setIsManualCategorySelect(true);
+                    }}
+                    className={`py-2 px-2.5 rounded-xl border text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer text-center ${
+                      isSelected
+                        ? 'border-amber-500 bg-amber-500 text-white shadow-sm ring-2 ring-amber-400/40 font-bold'
+                        : 'border-slate-200 hover:bg-slate-50 text-slate-700 bg-white'
+                    }`}
+                  >
+                    <IconComp className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-white' : 'text-amber-600'}`} />
+                    <span className="truncate">{lang === 'gu' ? cat.name_gu : cat.name_en}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
+
+          {/* Worker Selector (Dynamic when category is Worker Advance / Upad / Wages) */}
+          {isWorkerCategory && (
+            <div className="p-3.5 sm:p-4 rounded-xl bg-amber-50/70 border border-amber-300 space-y-2.5 animate-fade-in shadow-xs">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold uppercase tracking-wider text-amber-950 flex items-center gap-1.5">
+                  <Users className="w-4 h-4 text-amber-600" />
+                  <span>{lang === 'gu' ? 'કારીગર પસંદ કરો (Worker)' : 'Select Worker / Karigar'}</span>
+                  <span className="text-red-500">*</span>
+                </label>
+
+                {autoMatchedWorker && (
+                  <span className="text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-300 flex items-center gap-1 shadow-xs">
+                    <Check className="w-3 h-3 text-emerald-600" />
+                    <span>{lang === 'gu' ? `ઓળખાયેલ: ${autoMatchedWorker.name.split(' ')[0]}` : `Auto: ${autoMatchedWorker.name.split(' ')[0]}`}</span>
+                  </span>
+                )}
+              </div>
+
+              {/* Quick 1-Tap Worker Chips */}
+              <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto pt-0.5">
+                {workers.map((w) => {
+                  const isSelected = workerId === w.id;
+                  return (
+                    <button
+                      key={w.id}
+                      type="button"
+                      onClick={() => {
+                        setWorkerId(w.id);
+                        setIsManualWorkerSelect(true);
+                        setAutoMatchedWorker(w);
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                        isSelected
+                          ? 'bg-amber-600 text-white shadow-sm ring-2 ring-amber-500/40'
+                          : 'bg-white text-slate-700 hover:bg-amber-100/70 border border-slate-200'
+                      }`}
+                    >
+                      <span>{w.name}</span>
+                      {w.outstanding_advance > 0 && (
+                        <span className={`text-[10px] px-1 rounded ${isSelected ? 'bg-amber-700 text-amber-100' : 'bg-amber-50 text-amber-800'}`}>
+                          ₹{w.outstanding_advance}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Worker Dropdown for comprehensive list */}
+              <select
+                value={workerId}
+                onChange={(e) => {
+                  setWorkerId(e.target.value);
+                  setIsManualWorkerSelect(true);
+                  const found = workers.find(w => w.id === e.target.value);
+                  setAutoMatchedWorker(found || null);
+                }}
+                className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-amber-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+              >
+                <option value="">{lang === 'gu' ? '-- કારીગર પસંદ કરો --' : '-- Select Worker --'}</option>
+                {workers.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name} {w.role_title ? `(${w.role_title})` : ''} {w.outstanding_advance > 0 ? `• બાકી ઉપાડ: ₹${w.outstanding_advance}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Vendor Selector (Dynamic when category is Raw Materials, Vegetables, Packaging, etc.) */}
+          {isVendorCategory && (
+            <div className="p-3.5 sm:p-4 rounded-xl bg-amber-50/70 border border-amber-300 space-y-2.5 animate-fade-in shadow-xs">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold uppercase tracking-wider text-amber-950 flex items-center gap-1.5">
+                  <Store className="w-4 h-4 text-amber-600" />
+                  <span>{lang === 'gu' ? 'વેપારી / સપ્લાયર પસંદ કરો (Vendor)' : 'Select Vendor / Supplier'}</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowVendorModal(true)}
+                  className="text-[11px] text-amber-700 hover:text-amber-800 font-bold flex items-center gap-1 cursor-pointer bg-amber-100 hover:bg-amber-200/80 px-2 py-0.5 rounded-full transition"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>{lang === 'gu' ? 'નવા વેપારી ઉમેરો' : 'Add New'}</span>
+                </button>
+              </div>
+
+              {/* Quick 1-Tap Vendor Chips (for fast tap) */}
+              {vendors.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pt-0.5">
+                  {vendors.slice(0, 8).map((v) => {
+                    const isSelected = vendorId === v.id;
+                    return (
+                      <button
+                        key={v.id}
+                        type="button"
+                        onClick={() => setVendorId(isSelected ? '' : v.id)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                          isSelected
+                            ? 'bg-amber-600 text-white shadow-sm ring-2 ring-amber-500/40'
+                            : 'bg-white text-slate-700 hover:bg-amber-100/70 border border-slate-200'
+                        }`}
+                      >
+                        <span>{v.name}</span>
+                        {isSelected && <Check className="w-3 h-3 text-white" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Vendor Dropdown */}
+              <select
+                value={vendorId}
+                onChange={(e) => setVendorId(e.target.value)}
+                className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-amber-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30"
+              >
+                <option value="">{t('lbl_select_vendor')}</option>
+                {vendors.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name} {v.phone ? `(${v.phone})` : ''} {v.category ? `• ${v.category}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* 3. Amount */}
           <div>
@@ -807,38 +1346,22 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
             </div>
           </div>
 
-          {/* 4. Payment Method */}
-          <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1">
-              {t('lbl_payment_method')} *
+          {/* 4. Payment Method (Clean Dropdown Selector) */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+              <span>{t('lbl_payment_method')}</span>
+              <span className="text-amber-500">*</span>
             </label>
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-              {[
-                { id: 'cash', label: t('pm_cash') },
-                { id: 'upi', label: 'UPI (GPay)' },
-                { id: 'bank_transfer', label: 'Bank' },
-                { id: 'credit', label: t('pm_credit') },
-                { id: 'card', label: t('pm_card') },
-                { id: 'other', label: t('pm_other') }
-              ].map((pm) => (
-                <button
-                  key={pm.id}
-                  type="button"
-                  onClick={() => {
-                    setPaymentMethod(pm.id);
-                    if (pm.id === 'credit') setPaymentStatus('unpaid');
-                    else setPaymentStatus('paid');
-                  }}
-                  className={`py-2 px-2 rounded-xl border text-xs font-semibold text-center transition ${
-                    paymentMethod === pm.id
-                      ? 'border-amber-500 bg-amber-500 text-white shadow-sm ring-2 ring-amber-400/40 font-bold'
-                      : 'border-slate-200 hover:bg-slate-50 text-slate-600 bg-white'
-                  }`}
-                >
-                  {pm.label}
-                </button>
-              ))}
-            </div>
+            <PaymentMethodDropdown
+              paymentMethod={paymentMethod}
+              onSelect={(pmId) => {
+                setPaymentMethod(pmId);
+                if (pmId === 'credit') setPaymentStatus('unpaid');
+                else setPaymentStatus('paid');
+              }}
+              lang={lang}
+              t={t}
+            />
           </div>
         </div>
 
@@ -849,225 +1372,11 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-amber-500" />
-                <span>{lang === 'gu' ? 'બિલ સ્કેન અને વધારાની વિગતો' : 'Attach Receipt & Additional Details'}</span>
+                <span>{lang === 'gu' ? 'વધારાની હિસાબી વિગતો (તારીખ, વેપારી, UTR)' : 'Additional Accounting Details (Date, Vendor, UTR)'}</span>
               </h3>
               <span className="text-[11px] font-bold text-amber-800 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200/70">
-                {lang === 'gu' ? 'AI ઓટો-ફિલ ઉપલબ્ધ' : 'AI Auto-Fill Enabled'}
+                {lang === 'gu' ? 'વિસ્તૃત મોડ' : 'Detailed Mode'}
               </span>
-            </div>
-
-            {/* 1. TOP ATTACH RECEIPT / BILL COMPONENT */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                  <Upload className="w-4 h-4 text-amber-600" />
-                  <span>{t('lbl_attach_receipt_top')}</span>
-                </label>
-                <span className="text-[11px] text-slate-400">
-                  {lang === 'gu' ? 'JPG, PNG, PDF (મહત્તમ 10MB)' : 'JPG, PNG, PDF (Max 10MB)'}
-                </span>
-              </div>
-
-              {/* Hidden Inputs for File and Camera */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/jpeg,image/png,image/webp,application/pdf"
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files && e.target.files[0]) {
-                    handleScanReceipt(e.target.files[0]);
-                  }
-                }}
-              />
-              <input
-                ref={cameraInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files && e.target.files[0]) {
-                    handleScanReceipt(e.target.files[0]);
-                  }
-                }}
-              />
-
-              {/* Upload Zone / Active State / Preview */}
-              {scanning ? (
-                <div className="flex flex-col items-center justify-center p-6 sm:p-8 bg-amber-50/60 rounded-2xl border-2 border-dashed border-amber-400 animate-pulse">
-                  <Loader2 className="w-9 h-9 text-amber-600 animate-spin mb-3" />
-                  <p className="text-sm font-bold text-slate-900">{t('lbl_analyzing_bill')}</p>
-                  <p className="text-xs text-slate-600 text-center max-w-md mt-1">
-                    {t('lbl_extracting_items')}
-                  </p>
-                </div>
-              ) : receiptFile ? (
-                <div className="p-3.5 sm:p-4 bg-amber-50/50 rounded-2xl border border-amber-300/80 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    {previewUrl ? (
-                      <img
-                        src={previewUrl}
-                        alt="Receipt preview"
-                        className="w-14 h-14 object-cover rounded-xl border border-amber-200 shrink-0 bg-white shadow-xs"
-                      />
-                    ) : (
-                      <div className="w-14 h-14 rounded-xl bg-amber-100/80 text-amber-800 flex items-center justify-center shrink-0 border border-amber-200">
-                        <FileText className="w-7 h-7" />
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-slate-900 truncate">
-                          {receiptFile.name}
-                        </span>
-                        <span className="text-[10px] text-emerald-800 font-bold bg-emerald-100 px-2 py-0.5 rounded-full shrink-0 flex items-center gap-1">
-                          <Check className="w-3 h-3" />
-                          {lang === 'gu' ? 'જોડાયેલ' : 'Attached'}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        {(receiptFile.size / 1024).toFixed(0)} KB • {lang === 'gu' ? 'બિલ સ્કેન થઈ ચૂક્યું છે' : 'Scanned & Decoded'}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="flex-1 sm:flex-none px-3 py-1.5 text-xs font-bold text-amber-900 bg-white border border-amber-300 rounded-xl hover:bg-amber-100/50 transition shadow-xs"
-                    >
-                      {lang === 'gu' ? 'બદલો' : 'Change'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setReceiptFile(null);
-                        setStoredFileInfo(null);
-                        if (previewUrl) URL.revokeObjectURL(previewUrl);
-                        setPreviewUrl(null);
-                        setDecodedItems([]);
-                        setScanMessage(null);
-                        setDuplicateExpense(null);
-                      }}
-                      className="flex-1 sm:flex-none px-3 py-1.5 text-xs font-semibold text-red-600 hover:text-red-700 bg-white border border-red-200 rounded-xl hover:bg-red-50 transition shadow-xs"
-                    >
-                      {lang === 'gu' ? 'દૂર કરો' : 'Remove'}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="p-5 sm:p-6 bg-slate-50/70 hover:bg-amber-50/30 rounded-2xl border-2 border-dashed border-slate-300 hover:border-amber-400 transition text-center space-y-3">
-                  <div className="w-11 h-11 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto shadow-xs">
-                    <Upload className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-xs sm:text-sm font-bold text-slate-800">
-                      {lang === 'gu' ? 'બિલ અપલોડ કરો અથવા ફોટો પાડો' : 'Upload invoice or take a photo'}
-                    </p>
-                    <p className="text-[11px] text-slate-500 mt-1 max-w-md mx-auto">
-                      {t('lbl_attach_receipt_sub')}
-                    </p>
-                  </div>
-                  <div className="flex items-center justify-center gap-2.5 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-sm shadow-amber-500/25 transition active:scale-[0.98]"
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      <span>{t('btn_choose_file')}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => cameraInputRef.current?.click()}
-                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs border border-slate-300 transition active:scale-[0.98]"
-                    >
-                      <Camera className="w-3.5 h-3.5 text-slate-500" />
-                      <span>{t('btn_take_photo')}</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Duplicate Expense Warning Banner */}
-              {duplicateExpense && (
-                <div className="p-4 rounded-xl border border-red-300 bg-red-50 text-red-900 flex items-start gap-3 shadow-sm">
-                  <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-                  <div className="flex-1 text-xs sm:text-sm">
-                    <div className="font-bold text-red-800 text-sm sm:text-base flex items-center gap-1.5">
-                      <span>{t('msg_duplicate_expense_title')}</span>
-                    </div>
-                    <p className="mt-1 text-red-700 leading-relaxed">
-                      {lang === 'gu'
-                        ? `આ બિલ/ખર્ચ પહેલેથી જ તારીખ ${formatDate(duplicateExpense.transaction_date)} ના રોજ નોંધાઈ ગયો છે (ઇન્વોઇસ #${duplicateExpense.invoice_number || 'N/A'}, રકમ ${formatINR(duplicateExpense.amount)}, રેફરન્સ: ${duplicateExpense.transaction_number}). ડુપ્લિકેટ એન્ટ્રી મંજૂર નથી.`
-                        : `An expense for this bill has already been recorded on ${formatDate(duplicateExpense.transaction_date)} (Invoice #${duplicateExpense.invoice_number || 'N/A'}, Amount ${formatINR(duplicateExpense.amount)}, Ref: ${duplicateExpense.transaction_number}). Duplicate entries are not permitted.`}
-                    </p>
-                    <div className="mt-2 text-xs font-bold text-red-700 bg-white/80 inline-block px-2.5 py-1 rounded-md border border-red-200">
-                      {t('btn_duplicate_blocked')}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Scan Feedback Banner */}
-              {scanMessage && !duplicateExpense && (
-                <div className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 animate-fade-in ${
-                  scanMessage.type === 'success'
-                    ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
-                    : 'bg-amber-50 text-amber-900 border-amber-200'
-                }`}>
-                  {scanMessage.type === 'success' ? (
-                    <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                  )}
-                  <div className="min-w-0">
-                    <p className="font-bold">{scanMessage.text}</p>
-                    {scanMessage.details && (
-                      <p className="text-[11px] opacity-80 mt-0.5">{scanMessage.details}</p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Decoded Items Display */}
-              {decodedItems.length > 0 && (
-                <div className="bg-amber-50/70 p-3.5 rounded-xl border border-amber-200/80 space-y-2">
-                  <div className="flex items-center justify-between text-xs font-bold text-amber-950">
-                    <span className="flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-                      {t('lbl_decoded_items')} ({decodedItems.length})
-                    </span>
-                    <span className="text-[10px] text-amber-800 font-semibold bg-amber-100/90 px-2 py-0.5 rounded-full">
-                      {lang === 'gu' ? 'નોંધમાં ઉમેરાઈ ગયું' : 'Added to notes'}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {decodedItems.map((item, idx) => (
-                      <div
-                        key={idx}
-                        className="bg-white p-2 rounded-lg border border-amber-200/60 flex items-center justify-between text-xs shadow-xs"
-                      >
-                        <div className="min-w-0 truncate pr-2">
-                          <span className="font-bold text-slate-800">{item.description}</span>
-                          {item.quantity && (
-                            <span className="ml-1.5 text-[11px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
-                              {item.quantity}
-                            </span>
-                          )}
-                        </div>
-                        {(item.amount || item.rate) && (
-                          <span className="font-bold text-slate-900 shrink-0">
-                            {item.amount ? `₹${item.amount}` : `@ ₹${item.rate}`}
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
 
             {/* 2. CRITERIA FIELDS GRID */}
@@ -1119,34 +1428,36 @@ export function AddExpense({ onSaved, initialValues = null, onOpenVoice }) {
                 </div>
               )}
 
-              {/* Vendor Selector + Quick Add */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-semibold text-slate-700">
-                    {t('lbl_vendor')}
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setShowVendorModal(true)}
-                    className="text-[11px] text-amber-700 hover:text-amber-800 font-bold flex items-center gap-0.5"
+              {/* Optional Vendor Selector for general operating expenses (utilities, transport, maintenance) if not already picked */}
+              {!isWorkerCategory && !isVendorCategory && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-slate-700">
+                      {t('lbl_vendor')}
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowVendorModal(true)}
+                      className="text-[11px] text-amber-700 hover:text-amber-800 font-bold flex items-center gap-0.5 cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>{lang === 'gu' ? 'નવા વેપારી ઉમેરો' : 'Add New'}</span>
+                    </button>
+                  </div>
+                  <select
+                    value={vendorId}
+                    onChange={(e) => setVendorId(e.target.value)}
+                    className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
                   >
-                    <Plus className="w-3 h-3" />
-                    <span>{lang === 'gu' ? 'નવા વેપારી ઉમેરો' : 'Add New'}</span>
-                  </button>
+                    <option value="">{t('lbl_select_vendor')}</option>
+                    {vendors.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name} {v.phone ? `(${v.phone})` : ''}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-                <select
-                  value={vendorId}
-                  onChange={(e) => setVendorId(e.target.value)}
-                  className="w-full px-3 py-2 text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-                >
-                  <option value="">{t('lbl_select_vendor')}</option>
-                  {vendors.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.name} {v.phone ? `(${v.phone})` : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              )}
 
               {/* Invoice Number */}
               <div>

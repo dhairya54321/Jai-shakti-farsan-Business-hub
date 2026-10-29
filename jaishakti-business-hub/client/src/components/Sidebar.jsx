@@ -14,34 +14,54 @@ import {
   Package,
   HandCoins,
   Building2,
+  ChefHat,
+  BookOpen,
+  Scale,
+  KeyRound,
   X
 } from 'lucide-react';
 
 export function Sidebar({ currentTab, setTab, isOpen, onClose }) {
-  const { role } = useAuth();
-  const { t } = useLanguage();
+  const { role, hasPermission } = useAuth();
+  const { lang, t } = useLanguage();
 
   const isOwnerOrManager = ['owner', 'manager'].includes(role);
 
-  const mainNav = [
-    { id: 'dashboard', label: t('nav_dashboard'), icon: LayoutDashboard },
-    { id: 'add_expense', label: t('nav_add_expense'), icon: PlusCircle, highlight: true },
-    { id: 'transactions', label: t('nav_transactions'), icon: Receipt },
-    { id: 'vendors', label: t('nav_vendors'), icon: Building2 },
-    { id: 'reports', label: t('nav_reports'), icon: BarChart3 },
-    { id: 'categories', label: t('nav_categories'), icon: Sliders },
+  const allMainNav = [
+    { id: 'dashboard', label: t('nav_dashboard'), icon: LayoutDashboard, requiredPerm: null },
+    { id: 'add_expense', label: t('nav_add_expense'), icon: PlusCircle, highlight: true, requiredPerm: 'can_add_expense' },
+    { id: 'production', label: t('nav_production') || 'ઉત્પાદન અને વજન', icon: ChefHat, check: () => role === 'owner' || hasPermission('can_record_production') },
+    { id: 'raw_materials', label: t('nav_raw_materials') || 'કાચો માલ & સ્ટોક', icon: Package, check: () => role === 'owner' || hasPermission('can_manage_stock') },
+    { id: 'recipes', label: t('nav_recipes') || 'રેસિપી તિજોરી', icon: BookOpen, check: () => role === 'owner' || hasPermission('can_view_recipes') || hasPermission('can_manage_recipes') },
+    { id: 'transactions', label: t('nav_transactions'), icon: Receipt, requiredPerm: null },
+    { id: 'vendors', label: t('nav_vendors'), icon: Building2, requiredPerm: 'can_manage_vendors' },
+    {
+      id: 'workers',
+      label: t('nav_workers'),
+      icon: HandCoins,
+      check: () => hasPermission('can_manage_workers') || hasPermission('can_record_attendance') || hasPermission('can_give_upad') || hasPermission('can_settle_salary')
+    },
+    { id: 'reports', label: t('nav_reports'), icon: BarChart3, requiredPerm: 'can_view_reports' },
+    { id: 'categories', label: t('nav_categories'), icon: Sliders, requiredPerm: 'can_manage_categories' },
   ];
 
-  const adminNav = [
-    { id: 'users', label: t('nav_users'), icon: Users },
-    { id: 'system', label: t('nav_system'), icon: ShieldCheck },
-    { id: 'windows_help', label: t('nav_windows_help'), icon: HelpCircle },
+  const mainNav = allMainNav.filter(item => {
+    if (role === 'owner') return true;
+    if (item.check) return item.check();
+    if (item.requiredPerm) return hasPermission(item.requiredPerm);
+    return true;
+  });
+
+  const allAdminNav = [
+    { id: 'users', label: t('nav_users'), icon: Users, check: () => role === 'owner' || hasPermission('can_manage_team') },
+    { id: 'system', label: t('nav_system'), icon: ShieldCheck, check: () => role === 'owner' || hasPermission('can_manage_system') },
+    { id: 'windows_help', label: t('nav_windows_help'), icon: HelpCircle, check: () => isOwnerOrManager },
   ];
+
+  const adminNav = allAdminNav.filter(item => item.check());
 
   const futureModules = [
-    { label: 'EZO Billing & Sales', icon: ShoppingBag },
-    { label: 'Raw Materials & Stock', icon: Package },
-    { label: 'Worker Payroll & Upad', icon: HandCoins },
+    { label: 'EZO Billing & POS Sales', icon: ShoppingBag },
   ];
 
   const handleSelect = (id) => {
@@ -83,7 +103,7 @@ export function Sidebar({ currentTab, setTab, isOpen, onClose }) {
           {/* Main Phase 1 & 2 Modules */}
           <div>
             <div className="px-3 mb-2 text-xs font-semibold uppercase tracking-wider text-amber-800/80">
-              Expenses & Vendors (Phase 1 & 2)
+              {lang === 'gu' ? 'દુકાન હિસાબ અને ખાતાવહી' : 'Shop Ledger & Operations'}
             </div>
             <nav className="space-y-1">
               {mainNav.map((item) => {

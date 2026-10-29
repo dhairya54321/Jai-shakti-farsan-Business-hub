@@ -41,11 +41,14 @@ export const VoiceParserService = {
     const db = getDatabase();
     const categories = db.prepare('SELECT id, code, name_en, name_gu FROM expense_categories WHERE business_id = ? AND is_active = 1').all(businessId);
     const vendors = db.prepare('SELECT id, name FROM vendors WHERE business_id = ? AND is_active = 1').all(businessId);
+    const workers = db.prepare('SELECT id, name, phone, diary_page FROM workers WHERE business_id = ? AND is_active = 1').all(businessId);
 
     let extractedAmount = null;
     let extractedPaymentMethod = null;
     let extractedCategoryId = null;
     let extractedVendorId = null;
+    let extractedWorkerId = null;
+    let extractedWorkerName = null;
     let extractedDate = null;
     let extractedDescription = cleanInput;
 
@@ -121,7 +124,35 @@ export const VoiceParserService = {
       if (generalCat) extractedCategoryId = generalCat.id;
     }
 
-    // 5. Extract Vendor
+    // 5. Extract Worker (for worker advance / wages)
+    const cleanForWorker = normalized
+      .replace(/[0-9]/g, ' ')
+      .replace(/\b(upad|advance|cash|paid|pay|rs|inr|salary|wage|bhai|ben|maharaj|katila|karigar)\b/gi, ' ')
+      .replace(/(ઉપાડ|એડવાન્સ|રોકડ|રોકડા|રૂપિયા|પગાર|ભાઈ|બેન|મહારાજ|કારીગર|કાતીલા|આપ્યા|આપ્યો)/g, ' ')
+      .trim();
+    const workerTokens = cleanForWorker.split(/[\s,()/-]+/).filter(p => p.length >= 2);
+
+    for (const w of workers) {
+      const cleanWorkerName = (w.name || '').toLowerCase();
+      const wParts = cleanWorkerName.split(/[\s,()/-]+/).filter(p => p.length >= 2);
+      for (const tok of workerTokens) {
+        const isMatch = wParts.some(p => p.includes(tok) || tok.includes(p) || (p.length >= 3 && tok.length >= 3 && (p.startsWith(tok.slice(0, 3)) || tok.startsWith(p.slice(0, 3)))));
+        if (isMatch) {
+          extractedWorkerId = w.id;
+          extractedWorkerName = w.name;
+          break;
+        }
+      }
+      if (extractedWorkerId) break;
+    }
+
+    // If worker recognized, prefer worker_advance_upad category if not already set
+    if (extractedWorkerId && (!extractedCategoryId || extractedCategoryId === categories.find(c => c.code === 'other_operating')?.id)) {
+      const workerCat = categories.find(c => c.code === 'worker_advance_upad');
+      if (workerCat) extractedCategoryId = workerCat.id;
+    }
+
+    // 6. Extract Vendor
     for (const v of vendors) {
       const cleanVendorName = v.name.toLowerCase();
       // Match keywords from vendor name
@@ -135,7 +166,7 @@ export const VoiceParserService = {
       if (extractedVendorId) break;
     }
 
-    // 6. Extract Date
+    // 7. Extract Date
     const todayStr = new Date().toISOString().slice(0, 10);
     if (/ગઈકાલે|yesterday/i.test(normalized)) {
       const d = new Date();
@@ -154,9 +185,11 @@ export const VoiceParserService = {
         payment_method: extractedPaymentMethod,
         transaction_date: extractedDate,
         vendor_id: extractedVendorId,
+        worker_id: extractedWorkerId,
+        worker_name: extractedWorkerName,
         description: cleanInput
       },
-      confidence: (extractedAmount && extractedCategoryId) ? 'high' : (extractedAmount ? 'medium' : 'low')
+      confidence: (extractedAmount && (extractedCategoryId || extractedWorkerId)) ? 'high' : (extractedAmount ? 'medium' : 'low')
     };
   }
 };

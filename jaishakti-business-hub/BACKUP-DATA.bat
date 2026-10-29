@@ -9,6 +9,7 @@ echo   Creating Jai Shakti Business Data Backup
 echo ==========================================================
 echo.
 
+if exist "%LOCALAPPDATA%\Programs\nodejs" set "PATH=%LOCALAPPDATA%\Programs\nodejs;%PATH%"
 node server\scripts\backup-cli.js
 
 echo.

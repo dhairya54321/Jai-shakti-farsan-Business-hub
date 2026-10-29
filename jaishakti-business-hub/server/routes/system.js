@@ -6,6 +6,7 @@ import { authenticateToken, requireRole } from '../middleware/auth.js';
 import { getDatabase } from '../db/index.js';
 import config from '../config.js';
 import BackupService from '../services/backupService.js';
+import tunnelService from '../services/tunnelService.js';
 
 const router = express.Router();
 
@@ -116,6 +117,30 @@ router.post('/restore', authenticateToken, requireRole(['owner']), async (req, r
   } catch (err) {
     res.status(500).json({ success: false, error: 'Restore failed: ' + err.message });
   }
+});
+
+// GET /api/system/tunnel - Get Cloudflare Remote Tunnel status & live public URL
+router.get('/tunnel', authenticateToken, (req, res) => {
+  res.json({
+    success: true,
+    ...tunnelService.getStatus()
+  });
+});
+
+// POST /api/system/tunnel/start - Start Remote Tunnel (Owner/Manager only)
+router.post('/tunnel/start', authenticateToken, requireRole(['owner', 'manager']), async (req, res) => {
+  try {
+    const result = await tunnelService.start(config.PORT);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/system/tunnel/stop - Stop Remote Tunnel (Owner/Manager only)
+router.post('/tunnel/stop', authenticateToken, requireRole(['owner', 'manager']), (req, res) => {
+  const result = tunnelService.stop();
+  res.json(result);
 });
 
 export default router;

@@ -90,4 +90,75 @@ describe('B. Payment Workflows and Overpayment Protection Tests', () => {
       });
     }, /exceeds remaining obligation/);
   });
+
+  test('Update payment method and amount on an existing payment', () => {
+    // Expense paid in full with cash by mistake
+    const expense = ExpenseService.createExpense(ownerUser, {
+      category_id: categoryId,
+      amount: 8000.00,
+      payment_status: 'paid',
+      payment_method: 'cash',
+      description: 'Mistakenly recorded as cash'
+    });
+
+    assert.equal(expense.payments[0].payment_method, 'cash');
+    const paymentId = expense.payments[0].id;
+
+    // Update payment method to UPI
+    const updated = ExpenseService.updatePayment(ownerUser, expense.id, paymentId, {
+      payment_method: 'upi',
+      amount: 8000.00,
+      notes: 'Corrected to online UPI payment'
+    });
+
+    assert.equal(updated.payment_status, 'paid');
+    assert.equal(updated.payment_method, 'upi');
+    assert.equal(updated.payments[0].payment_method, 'upi');
+    assert.equal(updated.payments[0].amount, 8000.00);
+  });
+
+  test('Delete payment restores balance and updates status to unpaid', () => {
+    const expense = ExpenseService.createExpense(ownerUser, {
+      category_id: categoryId,
+      amount: 4500.00,
+      payment_status: 'paid',
+      payment_method: 'cash',
+      description: 'Accidental payment'
+    });
+
+    assert.equal(expense.payments.length, 1);
+    const paymentId = expense.payments[0].id;
+
+    // Delete payment
+    const updated = ExpenseService.deletePayment(ownerUser, expense.id, paymentId, 'Payment deleted to correct mistake');
+
+    assert.equal(updated.payment_status, 'unpaid');
+    assert.equal(updated.total_paid, 0);
+    assert.equal(updated.balance_due, 4500.00);
+    assert.equal(updated.payments.length, 0);
+  });
+
+  test('Editing expense payment_method and amount updates linked payment', () => {
+    const expense = ExpenseService.createExpense(ownerUser, {
+      category_id: categoryId,
+      amount: 12000.00,
+      payment_status: 'paid',
+      payment_method: 'cash',
+      description: 'Initial cash payment'
+    });
+
+    assert.equal(expense.payments[0].payment_method, 'cash');
+
+    // Update expense to UPI with updated amount 11500
+    const updated = ExpenseService.updateExpense(ownerUser, expense.id, {
+      amount: 11500.00,
+      payment_method: 'upi'
+    }, 'Corrected bill amount and payment method to UPI');
+
+    assert.equal(updated.amount, 11500.00);
+    assert.equal(updated.payment_method, 'upi');
+    assert.equal(updated.payment_status, 'paid');
+    assert.equal(updated.payments[0].amount, 11500.00);
+    assert.equal(updated.payments[0].payment_method, 'upi');
+  });
 });

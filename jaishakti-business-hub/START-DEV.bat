@@ -13,6 +13,7 @@ echo Any code changes will automatically update in your browser.
 echo.
 
 :: 1. Check Node.js
+if exist "%LOCALAPPDATA%\Programs\nodejs" set "PATH=%LOCALAPPDATA%\Programs\nodejs;%PATH%"
 where node >nul 2>nul
 if %errorlevel% neq 0 (
     echo [ERROR] Node.js is not detected. Please run SETUP-WINDOWS.bat first.
@@ -24,7 +25,7 @@ if %errorlevel% neq 0 (
 if not exist "node_modules" (
     call SETUP-WINDOWS.bat
 ) else (
-    node -e "require('better-sqlite3')" >nul 2>&1
+    node -e "const d = new (require('better-sqlite3'))()" >nul 2>&1
     if !errorlevel! neq 0 (
         echo [NOTICE] Adapting native dependencies for Windows architecture...
         call SETUP-WINDOWS.bat

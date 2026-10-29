@@ -240,6 +240,53 @@ describe('A. Expense Creation and Validation Tests', () => {
     assert.equal(auditRow.actor_user_id, ownerUser.id);
     assert.equal(auditRow.reason, 'Accidental duplicate test entry');
   });
+
+  test('Worker advance (upad) automatically matches worker and creates entry in worker khata book', () => {
+    const upadCat = db.prepare("SELECT id FROM expense_categories WHERE code = 'worker_advance_upad' AND business_id = ?").get(testBizId);
+    assert.ok(upadCat, 'Worker advance category must exist');
+
+    // Create a worker if not already existing
+    let worker = db.prepare("SELECT * FROM workers WHERE business_id = ? AND name LIKE '%Ramesh%'").get(testBizId);
+    if (!worker) {
+      const wId = 'wrk_test_ramesh';
+      db.prepare(`
+        INSERT INTO workers (id, business_id, name, role_title, wage_type, base_salary, is_active, created_at, updated_at)
+        VALUES (?, ?, 'Ramesh Maharaj (રમેશ)', 'head_chef', 'monthly', 14000, 1, datetime('now'), datetime('now'))
+      `).run(wId, testBizId);
+      worker = db.prepare("SELECT * FROM workers WHERE id = ?").get(wId);
+    }
+
+    // 1. Voice parser test: spoken text extracts worker_id
+    const voiceResult = VoiceParserService.parseSpokenText(testBizId, 'રમેશને ૨૫૦૦ ઉપાડ આપ્યો');
+    assert.equal(voiceResult.success, true);
+    assert.equal(voiceResult.extracted.amount, 2500);
+    assert.equal(voiceResult.extracted.worker_id, worker.id);
+
+    // 2. Create expense with "ramesh upad" note (no worker_id explicitly passed)
+    const expense = ExpenseService.createExpense(ownerUser, {
+      category_id: upadCat.id,
+      amount: 2500.00,
+      payment_method: 'cash',
+      payment_status: 'paid',
+      description: 'ramesh upad'
+    });
+
+    assert.ok(expense);
+    assert.equal(expense.worker_id, worker.id);
+    assert.equal(expense.worker_name, worker.name);
+
+    // 3. Verify entry was automatically written into worker_transactions
+    const wtx = db.prepare('SELECT * FROM worker_transactions WHERE expense_id = ?').get(expense.id);
+    assert.ok(wtx, 'Worker transaction must be created in khata book');
+    assert.equal(wtx.worker_id, worker.id);
+    assert.equal(wtx.transaction_type, 'advance_given');
+    assert.equal(wtx.amount, 2500.00);
+
+    // 4. Verify deleting expense removes the worker khata entry
+    ExpenseService.deleteExpense(ownerUser, expense.id, 'Clean up test expense');
+    const wtxAfter = db.prepare('SELECT * FROM worker_transactions WHERE expense_id = ?').get(expense.id);
+    assert.equal(wtxAfter, undefined, 'Worker transaction should be removed when expense is deleted');
+  });
 });
 
 

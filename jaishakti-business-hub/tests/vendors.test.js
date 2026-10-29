@@ -433,4 +433,42 @@ startxref
     assert.equal(confidence.gstin, 'extracted');
     assert.equal(confidence.totalAmount, 'extracted');
   });
+
+  test('14. checkBillDuplicate detects duplicate bill by bill_number and vendor', () => {
+    // ven_001 is Rani Oil Traders in test database
+    const bill = VendorService.saveBill(ownerUser, {
+      vendor_id: 'ven_001',
+      bill_number: 'RANI-9901',
+      bill_date: '2026-10-25',
+      total_amount: 15400,
+      paid_amount: 15400
+    });
+    assert.ok(bill.id);
+
+    // Now test duplicate detection with same bill number & vendor
+    const dupe = ExpenseService.checkBillDuplicate(testBizId, {
+      vendor_id: 'ven_001',
+      bill_number: 'RANI-9901',
+      total_amount: 15400
+    });
+
+    assert.equal(dupe.isDuplicate, true);
+    assert.equal(dupe.matchType, 'invoice_number');
+    assert.equal(dupe.duplicate.bill_number, 'RANI-9901');
+    assert.ok(dupe.message.includes('ડબલ એન્ટ્રી પ્રતિબંધિત છે'));
+  });
+
+  test('15. checkBillDuplicate detects duplicate bill by vendor, date and amount', () => {
+    // Unnumbered challan with vendor, date, amount
+    const dupe = ExpenseService.checkBillDuplicate(testBizId, {
+      vendor_id: 'ven_001',
+      bill_date: '2026-10-25',
+      total_amount: 15400
+    });
+
+    assert.equal(dupe.isDuplicate, true);
+    assert.equal(dupe.matchType, 'vendor_date_amount');
+    assert.equal(dupe.duplicate.total_amount, 15400);
+    assert.ok(dupe.message.includes('પહેલેથી જ ચોપડે નોંધાયેલ છે'));
+  });
 });

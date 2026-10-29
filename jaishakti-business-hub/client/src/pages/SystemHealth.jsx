@@ -12,8 +12,10 @@ import {
   AlertTriangle,
   CheckCircle,
   FileArchive,
-  RefreshCw
+  RefreshCw,
+  Smartphone
 } from 'lucide-react';
+import { RemoteAccessModal } from '../components/RemoteAccessModal';
 
 export function SystemHealth() {
   const { lang, t, formatDate } = useLanguage();
@@ -24,6 +26,7 @@ export function SystemHealth() {
   const [loading, setLoading] = useState(true);
   const [creatingBackup, setCreatingBackup] = useState(false);
   const [notice, setNotice] = useState('');
+  const [showRemoteModal, setShowRemoteModal] = useState(false);
 
   const loadHealthAndBackups = async () => {
     setLoading(true);
@@ -92,14 +95,23 @@ export function SystemHealth() {
           </p>
         </div>
 
-        <button
-          onClick={handleCreateBackup}
-          disabled={creatingBackup}
-          className="flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-md shadow-amber-500/20 transition disabled:opacity-50 self-start sm:self-auto"
-        >
-          <FileArchive className="w-4 h-4" />
-          <span>{creatingBackup ? 'Creating Archive...' : t('btn_backup_now')}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          <button
+            onClick={() => setShowRemoteModal(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs rounded-xl shadow-md shadow-emerald-600/20 transition"
+          >
+            <Smartphone className="w-4 h-4" />
+            <span>{t('lbl_remote_access')}</span>
+          </button>
+          <button
+            onClick={handleCreateBackup}
+            disabled={creatingBackup}
+            className="flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-md shadow-amber-500/20 transition disabled:opacity-50"
+          >
+            <FileArchive className="w-4 h-4" />
+            <span>{creatingBackup ? 'Creating...' : t('btn_backup_now')}</span>
+          </button>
+        </div>
       </div>
 
       {notice && (
@@ -241,6 +253,12 @@ export function SystemHealth() {
           Backups stored solely on the shop PC do not protect against physical damage, hardware failure, theft, or ransomware. We recommend copying the <code>backups/</code> folder to an external USB drive or off-site storage weekly.
         </p>
       </div>
+
+      {/* Remote Mobile Access Modal */}
+      <RemoteAccessModal
+        isOpen={showRemoteModal}
+        onClose={() => setShowRemoteModal(false)}
+      />
     </div>
   );
 }

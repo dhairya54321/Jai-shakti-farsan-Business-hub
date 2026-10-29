@@ -10,11 +10,12 @@ echo ==========================================================
 echo.
 
 :: 1. Check Node.js
+if exist "%LOCALAPPDATA%\Programs\nodejs" set "PATH=%LOCALAPPDATA%\Programs\nodejs;%PATH%"
 where node >nul 2>nul
 if %errorlevel% neq 0 (
     echo [ERROR] Node.js is not installed on this Windows PC.
     echo.
-    echo Please install Node.js LTS (v20 or v22) from:
+    echo Please install Node.js LTS v20 or v22 from:
     echo https://nodejs.org/
     echo.
     echo Opening download website in your browser...
@@ -25,7 +26,7 @@ if %errorlevel% neq 0 (
 
 echo [1/5] Node.js detected:
 node -v
-npm -v
+call npm.cmd -v
 echo.
 
 :: 2. Ensure persistent storage folders exist
@@ -43,17 +44,19 @@ if not exist ".env" (
 
 :: 4. Install / Rebuild dependencies for Windows
 echo [3/5] Installing project dependencies for Windows...
-call npm install
+call npm.cmd install
 
 echo [4/5] Testing native database module (better-sqlite3)...
-node -e "try { const DB = require('better-sqlite3'); console.log('[SUCCESS] Database driver verified.'); } catch (e) { process.exit(1); }" >nul 2>&1
+node -e "try { const DB = require('better-sqlite3'); const d = new DB(); console.log('[SUCCESS] Database driver verified.'); } catch (e) { process.exit(1); }" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [NOTICE] Rebuilding native binary for Windows architecture...
-    call npm rebuild better-sqlite3 sharp
-    node -e "try { const DB = require('better-sqlite3'); } catch (e) { process.exit(1); }" >nul 2>&1
-    if %errorlevel% neq 0 (
+    echo [NOTICE] Downloading native binary for Windows architecture...
+    pushd "%~dp0node_modules\better-sqlite3"
+    call npx.cmd --yes prebuild-install
+    popd
+    node -e "try { const DB = require('better-sqlite3'); const d = new DB(); } catch (e) { process.exit(1); }" >nul 2>&1
+    if !errorlevel! neq 0 (
         echo [RETRY] Running clean native install...
-        call npm install better-sqlite3 sharp --force
+        call npm.cmd install better-sqlite3 sharp --force
     )
 )
 
@@ -65,7 +68,7 @@ node server/db/migrate.js
 :: 6. Ensure frontend build is ready for 1-click production launch
 if not exist "server\public\index.html" (
     echo Building frontend production bundle...
-    call npm run build
+    call npm.cmd run build
 )
 
 echo.

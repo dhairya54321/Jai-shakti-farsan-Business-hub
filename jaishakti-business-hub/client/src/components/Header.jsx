@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
-import { Mic, Globe, LogOut, Menu, Shield, User } from 'lucide-react';
+import { Mic, Globe, LogOut, Menu, Shield, User, Smartphone } from 'lucide-react';
+import { RemoteAccessModal } from './RemoteAccessModal';
 
 export function Header({ onToggleSidebar, onOpenVoice }) {
   const { user, logout } = useAuth();
   const { lang, toggleLanguage, t } = useLanguage();
+  const [showRemoteModal, setShowRemoteModal] = useState(false);
 
   return (
     <header className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-amber-100 shadow-sm">
@@ -62,6 +64,16 @@ export function Header({ onToggleSidebar, onOpenVoice }) {
             <span className="font-semibold text-amber-700">{t('lang_switch')}</span>
           </button>
 
+          {/* Remote / Phone Link Shortcut */}
+          <button
+            onClick={() => setShowRemoteModal(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-emerald-200 hover:border-emerald-400 bg-emerald-50 hover:bg-emerald-100/80 text-emerald-800 font-bold text-xs sm:text-sm transition shadow-2xs"
+            title={lang === 'gu' ? 'મોબાઈલ અને બહારથી એક્સેસ QR કોડ' : 'Mobile Anywhere Access (4G/5G) QR Code'}
+          >
+            <Smartphone className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="hidden sm:inline">{t('btn_open_phone_link')}</span>
+          </button>
+
           {/* User Badge */}
           {user && (
             <div className="hidden sm:flex items-center gap-2 pl-2 border-l border-slate-200">
@@ -85,6 +97,12 @@ export function Header({ onToggleSidebar, onOpenVoice }) {
           </button>
         </div>
       </div>
+
+      {/* Remote Mobile Access Modal */}
+      <RemoteAccessModal
+        isOpen={showRemoteModal}
+        onClose={() => setShowRemoteModal(false)}
+      />
     </header>
   );
 }

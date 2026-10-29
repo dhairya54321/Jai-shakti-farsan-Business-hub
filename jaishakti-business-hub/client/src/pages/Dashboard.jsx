@@ -17,14 +17,24 @@ import {
   XCircle,
   ChevronRight,
   ShieldCheck,
-  RefreshCw
+  RefreshCw,
+  Package,
+  ChefHat,
+  Scale,
+  Boxes,
+  Layers,
+  Camera
 } from 'lucide-react';
+import { BillOcrModal } from './BillOcrModal.jsx';
 
 export function Dashboard({ onNavigate }) {
   const { role } = useAuth();
   const { lang, t, formatINR, formatDate } = useLanguage();
 
   const [metrics, setMetrics] = useState(null);
+  const [inventoryStats, setInventoryStats] = useState(null);
+  const [vendors, setVendors] = useState([]);
+  const [isUltimateOcrOpen, setIsUltimateOcrOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [actionLoadingId, setActionLoadingId] = useState(null);
@@ -33,8 +43,18 @@ export function Dashboard({ onNavigate }) {
     setLoading(true);
     setError('');
     try {
-      const data = await apiFetch('/api/reports/dashboard');
+      const [data, invData, venData] = await Promise.all([
+        apiFetch('/api/reports/dashboard'),
+        apiFetch('/api/manufacturing/dashboard-stats').catch(() => ({ success: false })),
+        apiFetch('/api/vendors').catch(() => ({ vendors: [] }))
+      ]);
       setMetrics(data);
+      if (invData && invData.success) {
+        setInventoryStats(invData.stats);
+      }
+      if (venData && Array.isArray(venData.vendors)) {
+        setVendors(venData.vendors);
+      }
     } catch (err) {
       setError(err.message || 'Failed to load dashboard metrics');
     } finally {
@@ -123,14 +143,55 @@ export function Dashboard({ onNavigate }) {
           </p>
         </div>
 
-        <button
-          onClick={() => onNavigate('add_expense')}
-          className="flex items-center gap-2 px-5 py-3 rounded-xl bg-white text-amber-800 hover:bg-amber-50 font-bold text-sm shadow-md active:scale-95 transition"
-        >
-          <PlusCircle className="w-5 h-5 text-amber-600" />
-          <span>{t('btn_quick_add')}</span>
-        </button>
+        <div className="flex flex-col sm:items-end gap-2.5 w-full sm:w-auto">
+          <button
+            onClick={() => onNavigate('add_expense')}
+            className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-white text-amber-800 hover:bg-amber-50 font-bold text-sm shadow-md active:scale-95 transition w-full sm:w-auto"
+          >
+            <PlusCircle className="w-5 h-5 text-amber-600" />
+            <span>{t('btn_quick_add')}</span>
+          </button>
+
+          <button
+            onClick={() => setIsUltimateOcrOpen(true)}
+            className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-amber-950/95 hover:bg-black text-amber-200 hover:text-white font-black text-xs sm:text-sm shadow-lg border border-amber-400/40 active:scale-95 transition group w-full sm:w-auto"
+          >
+            <Camera className="w-4 h-4 text-amber-400 group-hover:scale-110 transition-transform" />
+            <span>📸 Ultimate OCR Scan (બિલ સ્કેન)</span>
+          </button>
+        </div>
       </div>
+
+      {/* Owner Low-Stock Warning Alert Banner for Bharat Rana */}
+      {inventoryStats?.low_stock_count > 0 && (
+        <div className="bg-rose-50 border-2 border-rose-400 text-rose-900 p-4 sm:p-5 rounded-3xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in duration-300">
+          <div className="flex items-start gap-3.5">
+            <div className="p-2 rounded-2xl bg-rose-600 text-white flex-shrink-0 animate-pulse mt-0.5">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded-full bg-rose-200 text-rose-900 text-[10px] font-black uppercase tracking-wider">
+                  Urgent Stock Alert
+                </span>
+                <span className="text-xs font-bold text-rose-900">
+                  {inventoryStats.low_stock_count} {lang === 'gu' ? 'કાચો માલ ઓછો છે' : 'Materials Below Minimum Threshold'}
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm text-rose-800 mt-1 font-medium">
+                {inventoryStats.low_stock_items.slice(0, 4).map(m => `${m.name_gu} (${m.formatted_stock})`).join(' • ')}
+                {inventoryStats.low_stock_items.length > 4 ? ` + ${inventoryStats.low_stock_items.length - 4} more` : ''}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => onNavigate('raw_materials')}
+            className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-95 text-white font-black text-xs transition shadow-md shadow-rose-600/30 flex-shrink-0 whitespace-nowrap"
+          >
+            {lang === 'gu' ? 'સ્ટોક જુઓ અને ઓર્ડર કરો' : 'View Stock & Re-Order'}
+          </button>
+        </div>
+      )}
 
       {/* Primary KPI Cards Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
@@ -390,6 +451,117 @@ export function Dashboard({ onNavigate }) {
         </div>
       </div>
 
+      {/* Phase 2 (Part B): Live Stock Status & Production Output Widgets */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Widget 1: Raw Materials Stock Status */}
+        <div className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
+                  <Package className="w-5 h-5 text-amber-700" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm sm:text-base text-slate-900">
+                    {lang === 'gu' ? 'કાચો માલ સ્ટોક સ્થિતિ' : 'Raw Materials Inventory'}
+                  </h3>
+                  <span className="text-[11px] text-slate-400">
+                    {inventoryStats?.total_materials || 0} active materials tracked
+                  </span>
+                </div>
+              </div>
+
+              <button
+                onClick={() => onNavigate('raw_materials')}
+                className="flex items-center gap-1 text-xs font-bold text-amber-700 hover:text-amber-800"
+              >
+                <span>View All</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Quick stats mini-row */}
+            <div className="grid grid-cols-2 gap-2 my-3 text-xs">
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+                <span className="text-[10px] text-slate-400 uppercase font-semibold block">In Inventory</span>
+                <span className="text-lg font-black text-slate-800">
+                  {inventoryStats ? inventoryStats.total_materials - inventoryStats.low_stock_count : '—'} Items
+                </span>
+              </div>
+              <div className={`p-3 rounded-2xl border ${
+                inventoryStats?.low_stock_count > 0 ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-slate-50 border-slate-100 text-slate-800'
+              }`}>
+                <span className="text-[10px] uppercase font-semibold block">Low Stock Alert</span>
+                <span className="text-lg font-black">
+                  {inventoryStats?.low_stock_count || 0} Critical
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={() => onNavigate('raw_materials')}
+            className="w-full py-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold transition flex items-center justify-center gap-2 border border-amber-200/80 mt-2"
+          >
+            <Boxes className="w-4 h-4 text-amber-700" />
+            <span>{lang === 'gu' ? 'કાચો માલ અને સ્ટોક ખોલો' : 'Open Raw Materials & Stock'}</span>
+          </button>
+        </div>
+
+        {/* Widget 2: Kitchen Production Today */}
+        <div className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">
+                  <ChefHat className="w-5 h-5 text-emerald-700" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm sm:text-base text-slate-900">
+                    {lang === 'gu' ? 'આજનું રસોડાનું ઉત્પાદન' : "Today's Kitchen Production"}
+                  </h3>
+                  <span className="text-[11px] text-slate-400">
+                    Sailesh Bhai & Karigars
+                  </span>
+                </div>
+              </div>
+
+              <button
+                onClick={() => onNavigate('production')}
+                className="flex items-center gap-1 text-xs font-bold text-emerald-700 hover:text-emerald-800"
+              >
+                <span>Scale Sheet</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Quick stats mini-row */}
+            <div className="grid grid-cols-2 gap-2 my-3 text-xs">
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+                <span className="text-[10px] text-slate-400 uppercase font-semibold block">Batches Today</span>
+                <span className="text-lg font-black text-slate-800">
+                  {inventoryStats?.today_batches_count || 0} Batches
+                </span>
+              </div>
+              <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900">
+                <span className="text-[10px] uppercase font-semibold block">Total Finished Farsan</span>
+                <span className="text-lg font-black">
+                  {inventoryStats?.today_total_kg || 0} Kg
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={() => onNavigate('production')}
+            className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-xs font-bold transition flex items-center justify-center gap-2 shadow-sm mt-2"
+          >
+            <Scale className="w-4 h-4" />
+            <span>{lang === 'gu' ? 'નવો ઉત્પાદન બેચ શરૂ કરો' : 'Start New Production Batch'}</span>
+          </button>
+        </div>
+      </div>
+
       {/* Recent Transactions Table */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden">
         <div className="p-4 sm:p-5 flex items-center justify-between border-b border-slate-100">
@@ -459,6 +631,18 @@ export function Dashboard({ onNavigate }) {
           </table>
         </div>
       </div>
+
+      {/* Ultimate OCR Scan Modal */}
+      {isUltimateOcrOpen && (
+        <BillOcrModal
+          isOpen={isUltimateOcrOpen}
+          onClose={() => setIsUltimateOcrOpen(false)}
+          onBillSaved={() => {
+            fetchDashboard();
+          }}
+          vendors={vendors}
+        />
+      )}
     </div>
   );
 }

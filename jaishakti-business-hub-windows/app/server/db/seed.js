@@ -127,24 +127,8 @@ export function seedDatabase(dbInstance = null) {
     }
     console.log(`Configured ${activeCategories.length} active expense categories for Jai Shakti.`);
 
-    // 5. Seed Vendors
-    const initialVendors = [
-      { id: 'ven_001', name: 'Shree Krishna Oil Mill (તેલ સપ્લાયર)', phone: '9825012345', address: 'GIDC, Rajkot', tax: '24AAACR1234F1Z1', notes: 'Groundnut and cottonseed oil supplier' },
-      { id: 'ven_002', name: 'Gujarat Agro Besan Mills (બેસન)', phone: '9825123456', address: 'Grain Market, Gondal', tax: '24AABCG5678H1Z2', notes: 'High quality chana besan' },
-      { id: 'ven_003', name: 'National Packaging Industries (બોક્સ-પાઉચ)', phone: '9825234567', address: 'Metoda GIDC', tax: '24AABCN9012J1Z3', notes: 'Sweet boxes and farsan printed pouches' },
-      { id: 'ven_004', name: 'Jay Ambe Gas Agency (ગેસ સિલિન્ડર)', phone: '9825345678', address: 'Station Road', tax: null, notes: 'Commercial 19kg gas cylinders' }
-    ];
-
-    for (const v of initialVendors) {
-      const existing = db.prepare('SELECT id FROM vendors WHERE id = ?').get(v.id);
-      if (!existing) {
-        db.prepare(`
-          INSERT INTO vendors (id, business_id, name, phone, address, tax_identifier, notes, is_active, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-        `).run(v.id, BIZ_ID, v.name, v.phone, v.address, v.tax, v.notes, now, now);
-      }
-    }
-    console.log('Seeded initial vendors.');
+    // 5. Vendors are added dynamically via Bill OCR and manual entry
+    console.log('Vendors initialized.');
   })();
 
   return true;

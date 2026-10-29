@@ -13,11 +13,14 @@ import authRoutes from './routes/auth.js';
 import expenseRoutes from './routes/expenses.js';
 import categoryRoutes from './routes/categories.js';
 import vendorRoutes from './routes/vendors.js';
+import workerRoutes from './routes/workers.js';
 import reportRoutes from './routes/reports.js';
 import voiceRoutes from './routes/voice.js';
 import settingsRoutes from './routes/settings.js';
 import userRoutes from './routes/users.js';
 import systemRoutes from './routes/system.js';
+import manufacturingRoutes from './routes/manufacturing.js';
+import tunnelService from './services/tunnelService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -63,16 +66,45 @@ app.get('/api/health', (req, res) => {
   }
 });
 
+// 1.5 Secure Static Upload Streaming (Images, Receipts, Scanned Diary Photos)
+app.get([
+  '/api/expenses/attachments/:filename',
+  '/api/workers/diary-photos/:filename',
+  '/uploads/:filename'
+], (req, res) => {
+  try {
+    const filename = path.basename(req.params.filename);
+    const filePath = path.join(config.UPLOADS_DIR, filename);
+
+    // Prevent directory traversal attacks
+    const resolvedUploads = path.resolve(config.UPLOADS_DIR);
+    const resolvedFile = path.resolve(filePath);
+    if (!resolvedFile.startsWith(resolvedUploads)) {
+      return res.status(403).json({ success: false, error: 'Access denied.' });
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ success: false, error: 'Attachment file not found.' });
+    }
+
+    res.sendFile(filePath);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 2. Mount API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/vendors', vendorRoutes);
+app.use('/api/workers', workerRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/voice', voiceRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/system', systemRoutes);
+app.use('/api/manufacturing', manufacturingRoutes);
 
 // 3. Serve Frontend Production Assets (built React bundle)
 const publicDir = path.join(__dirname, 'public');
@@ -147,6 +179,13 @@ if (!isTest) {
     console.log(`  Database:     ${config.DB_PATH}`);
     console.log(`  Timezone:     ${config.BUSINESS_TIMEZONE}`);
     console.log('====================================================');
+
+    // Auto-start Cloudflare Remote Tunnel for access from anywhere (4G/5G mobile)
+    if (process.env.DISABLE_TUNNEL !== 'true' && tunnelService.isAvailable()) {
+      tunnelService.start(config.PORT).catch(err => {
+        console.warn('[Tunnel] Could not auto-start tunnel:', err.message);
+      });
+    }
   });
 
   // Port conflict error handling
