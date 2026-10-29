@@ -1730,6 +1730,63 @@ export function runMigrations(dbInstance = null) {
     console.log('Migration 015_backfill_vendor_bills_items_json already applied.');
   }
 
+  // Migration 016: Synchronize all expenses with their vendor's designated category
+  if (!appliedMigrations.includes('016_sync_vendor_expense_categories')) {
+    console.log('Applying migration: 016_sync_vendor_expense_categories...');
+    (() => {
+      const now = new Date().toISOString();
+
+      function resolveVendorCategory(vCategory, vName) {
+        const cat = String(vCategory || '').toLowerCase();
+        const name = String(vName || '').toLowerCase();
+
+        if (cat.includes('packag') || cat.includes('plastic') || cat.includes('print') || name.includes('vallabh') || name.includes('jagannath')) {
+          return 'cat_packaging_materials';
+        }
+        if (cat.includes('finish') || cat.includes('sweet') || cat.includes('namkeen') || cat.includes('thepla') || cat.includes('khakhra') || cat.includes('papad') || cat.includes('beverage') || name.includes('kamya') || name.includes('khushi') || name.includes('ranna') || name.includes('yogi') || name.includes('krishna sweet')) {
+          return 'cat_finished_goods';
+        }
+        if (cat.includes('vegetab') || cat.includes('potato') || name.includes('popatlal')) {
+          return 'cat_vegetable_purchase';
+        }
+        if (cat.includes('diesel') || cat.includes('fuel') || name.includes('mehta fuel')) {
+          return 'cat_fuel_gas';
+        }
+        if (cat.includes('repair') || cat.includes('service') || name.includes('panchal')) {
+          return 'cat_repairs_maintenance';
+        }
+        return 'cat_raw_materials';
+      }
+
+      const expenses = db.prepare(`
+        SELECT e.id, e.category_id, v.category as vendor_cat, v.name as vendor_name
+        FROM expenses e
+        JOIN vendors v ON v.id = e.vendor_id
+      `).all();
+
+      let updatedCount = 0;
+      const updateStmt = db.prepare('UPDATE expenses SET category_id = ?, updated_at = ? WHERE id = ?');
+
+      for (const exp of expenses) {
+        const targetCatId = resolveVendorCategory(exp.vendor_cat, exp.vendor_name);
+        if (exp.category_id !== targetCatId) {
+          updateStmt.run(targetCatId, now, exp.id);
+          updatedCount++;
+        }
+      }
+
+      console.log(`Synced ${updatedCount} transactions to match their vendors' categories.`);
+
+      db.prepare('INSERT INTO migrations (name, executed_at) VALUES (?, ?)').run(
+        '016_sync_vendor_expense_categories',
+        now
+      );
+    })();
+    console.log('Migration 016_sync_vendor_expense_categories applied successfully.');
+  } else {
+    console.log('Migration 016_sync_vendor_expense_categories already applied.');
+  }
+
   return true;
 }
 

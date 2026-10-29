@@ -293,13 +293,24 @@ router.post('/bills', uploadAttachment.single('bill'), (req, res) => {
     if (create_daily_expense === true || create_daily_expense === 'true') {
       try {
         let finalCategoryId = expense_category_id;
-        if (!finalCategoryId) {
-          const vendor = VendorService.getVendorById(req.user.business_id, vendor_id)?.vendor;
-          const vCat = (vendor?.category || '').toLowerCase();
-          if (vCat.includes('packaging')) finalCategoryId = 'cat_packaging_materials';
-          else if (vCat.includes('vegetable')) finalCategoryId = 'cat_vegetable_purchase';
-          else if (vCat.includes('finished') || vCat.includes('trade')) finalCategoryId = 'cat_finished_goods';
-          else finalCategoryId = 'cat_raw_materials';
+        const vendor = VendorService.getVendorById(req.user.business_id, vendor_id)?.vendor;
+        const vCat = String(vendor?.category || '').toLowerCase();
+        const vName = String(vendor?.name || '').toLowerCase();
+
+        if (!finalCategoryId || finalCategoryId === 'cat_raw_materials') {
+          if (vCat.includes('packag') || vCat.includes('plastic') || vCat.includes('print') || vName.includes('vallabh') || vName.includes('jagannath')) {
+            finalCategoryId = 'cat_packaging_materials';
+          } else if (vCat.includes('finish') || vCat.includes('sweet') || vCat.includes('namkeen') || vCat.includes('thepla') || vCat.includes('khakhra') || vCat.includes('papad') || vCat.includes('beverage') || vName.includes('kamya') || vName.includes('khushi') || vName.includes('ranna') || vName.includes('yogi') || vName.includes('krishna sweet')) {
+            finalCategoryId = 'cat_finished_goods';
+          } else if (vCat.includes('vegetab') || vCat.includes('potato') || vName.includes('popatlal')) {
+            finalCategoryId = 'cat_vegetable_purchase';
+          } else if (vCat.includes('diesel') || vCat.includes('fuel') || vName.includes('mehta fuel')) {
+            finalCategoryId = 'cat_fuel_gas';
+          } else if (vCat.includes('repair') || vCat.includes('service') || vName.includes('panchal')) {
+            finalCategoryId = 'cat_repairs_maintenance';
+          } else {
+            finalCategoryId = 'cat_raw_materials';
+          }
         }
 
         // Check if an expense with the same invoice_number and vendor already exists
@@ -442,12 +453,22 @@ router.post('/bills/:id/create-expense', (req, res) => {
     // Resolve category from vendor or fallback
     const vendor = db.prepare(`SELECT * FROM vendors WHERE id = ? AND business_id = ?`).get(bill.vendor_id, businessId);
     let categoryId = req.body.category_id;
-    if (!categoryId) {
-      const vCat = (vendor?.category || '').toLowerCase();
-      if (vCat.includes('packag')) categoryId = 'cat_packaging_materials';
-      else if (vCat.includes('finish')) categoryId = 'cat_finished_goods';
-      else if (vCat.includes('vegetab') || vCat.includes('potato')) categoryId = 'cat_vegetable_purchase';
-      else categoryId = 'cat_raw_materials';
+    if (!categoryId || categoryId === 'cat_raw_materials') {
+      const vCat = String(vendor?.category || '').toLowerCase();
+      const vName = String(vendor?.name || '').toLowerCase();
+      if (vCat.includes('packag') || vCat.includes('plastic') || vCat.includes('print') || vName.includes('vallabh') || vName.includes('jagannath')) {
+        categoryId = 'cat_packaging_materials';
+      } else if (vCat.includes('finish') || vCat.includes('sweet') || vCat.includes('namkeen') || vCat.includes('thepla') || vCat.includes('khakhra') || vCat.includes('papad') || vCat.includes('beverage') || vName.includes('kamya') || vName.includes('khushi') || vName.includes('ranna') || vName.includes('yogi') || vName.includes('krishna sweet')) {
+        categoryId = 'cat_finished_goods';
+      } else if (vCat.includes('vegetab') || vCat.includes('potato') || vName.includes('popatlal')) {
+        categoryId = 'cat_vegetable_purchase';
+      } else if (vCat.includes('diesel') || vCat.includes('fuel') || vName.includes('mehta fuel')) {
+        categoryId = 'cat_fuel_gas';
+      } else if (vCat.includes('repair') || vCat.includes('service') || vName.includes('panchal')) {
+        categoryId = 'cat_repairs_maintenance';
+      } else {
+        categoryId = 'cat_raw_materials';
+      }
     }
 
     // Check for existing bill attachment to link to expense

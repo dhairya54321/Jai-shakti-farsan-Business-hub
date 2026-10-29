@@ -818,6 +818,22 @@ export function BillOcrModal({ isOpen, onClose, onBillSaved, vendors = [] }) {
         expMethod = 'credit';
       }
 
+      const selectedVendor = vendorChoice === 'new' ? null : vendorList.find(v => v.id === finalVendorId);
+      const vCat = String(selectedVendor?.category || reviewFields.category || '').toLowerCase();
+      const vName = String(selectedVendor?.name || reviewFields.vendorName || '').toLowerCase();
+      let determinedCategoryId = 'cat_raw_materials';
+      if (vCat.includes('packag') || vCat.includes('plastic') || vCat.includes('print') || vName.includes('vallabh') || vName.includes('jagannath')) {
+        determinedCategoryId = 'cat_packaging_materials';
+      } else if (vCat.includes('finish') || vCat.includes('sweet') || vCat.includes('namkeen') || vCat.includes('thepla') || vCat.includes('khakhra') || vCat.includes('papad') || vCat.includes('beverage') || vName.includes('kamya') || vName.includes('khushi') || vName.includes('ranna') || vName.includes('yogi') || vName.includes('krishna sweet')) {
+        determinedCategoryId = 'cat_finished_goods';
+      } else if (vCat.includes('vegetab') || vCat.includes('potato') || vName.includes('popatlal')) {
+        determinedCategoryId = 'cat_vegetable_purchase';
+      } else if (vCat.includes('diesel') || vCat.includes('fuel') || vName.includes('mehta fuel')) {
+        determinedCategoryId = 'cat_fuel_gas';
+      } else if (vCat.includes('repair') || vCat.includes('service') || vName.includes('panchal')) {
+        determinedCategoryId = 'cat_repairs_maintenance';
+      }
+
       // Save Bill with 3-way atomic sync
       const billPayload = {
         vendor_id: finalVendorId,
@@ -842,7 +858,7 @@ export function BillOcrModal({ isOpen, onClose, onBillSaved, vendors = [] }) {
         stored_originalname: storedFileInfo ? storedFileInfo.originalname : (selectedFile ? selectedFile.name : null),
         stored_mimetype: storedFileInfo ? storedFileInfo.mimetype : (selectedFile ? selectedFile.type : null),
         create_daily_expense: reviewFields.createDailyExpense,
-        expense_category_id: 'cat_raw_materials',
+        expense_category_id: determinedCategoryId,
         expense_payment_method: expMethod,
         inward_stock_items: activeInwardItems
       };

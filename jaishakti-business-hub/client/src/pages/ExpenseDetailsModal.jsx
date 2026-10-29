@@ -1216,7 +1216,28 @@ export function ExpenseDetailsModal({
                             <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Vendor *</label>
                             <select
                               value={editVendorId}
-                              onChange={(e) => setEditVendorId(e.target.value)}
+                              onChange={(e) => {
+                                const newVId = e.target.value;
+                                setEditVendorId(newVId);
+                                const vObj = venList.find((v) => v.id === newVId);
+                                if (vObj) {
+                                  const vCat = String(vObj.category || '').toLowerCase();
+                                  const vName = String(vObj.name || '').toLowerCase();
+                                  if (vCat.includes('packag') || vCat.includes('plastic') || vCat.includes('print') || vName.includes('vallabh') || vName.includes('jagannath')) {
+                                    setEditCategoryId('cat_packaging_materials');
+                                  } else if (vCat.includes('finish') || vCat.includes('sweet') || vCat.includes('namkeen') || vCat.includes('thepla') || vCat.includes('khakhra') || vCat.includes('papad') || vCat.includes('beverage') || vName.includes('kamya') || vName.includes('khushi') || vName.includes('ranna') || vName.includes('yogi') || vName.includes('krishna sweet')) {
+                                    setEditCategoryId('cat_finished_goods');
+                                  } else if (vCat.includes('vegetab') || vCat.includes('potato') || vName.includes('popatlal')) {
+                                    setEditCategoryId('cat_vegetable_purchase');
+                                  } else if (vCat.includes('diesel') || vCat.includes('fuel') || vName.includes('mehta fuel')) {
+                                    setEditCategoryId('cat_fuel_gas');
+                                  } else if (vCat.includes('repair') || vCat.includes('service') || vName.includes('panchal')) {
+                                    setEditCategoryId('cat_repairs_maintenance');
+                                  } else {
+                                    setEditCategoryId('cat_raw_materials');
+                                  }
+                                }
+                              }}
                               className="w-full p-2 rounded-lg border border-amber-300 bg-white font-bold text-slate-900 text-xs focus:ring-1 focus:ring-amber-500"
                             >
                               <option value="">{t('lbl_no_vendor') || 'None'}</option>
