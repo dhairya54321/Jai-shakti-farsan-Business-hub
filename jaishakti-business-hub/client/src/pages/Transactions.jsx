@@ -176,11 +176,61 @@ export function Transactions({ onNavigate }) {
   const [categoryId, setCategoryId] = useState('');
   const [vendorId, setVendorId] = useState('');
   const [paymentStatus, setPaymentStatus] = useState('');
-  const [approvalStatus, setApprovalStatus] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [sortBy, setSortBy] = useState('');
+
+  // Date Preset Helpers (Today, Last Week, Last Month, This Month)
+  const getDatePresetRanges = () => {
+    const now = new Date();
+    const toISO = (d) => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+
+    const today = toISO(now);
+
+    const lastWeekDate = new Date(now);
+    lastWeekDate.setDate(lastWeekDate.getDate() - 7);
+    const lastWeek = toISO(lastWeekDate);
+
+    const thisMonthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+
+    const prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+    const lastMonthStart = toISO(prevMonthDate);
+    const lastMonthEnd = toISO(prevMonthEnd);
+
+    return {
+      today: { start: today, end: today },
+      last_week: { start: lastWeek, end: today },
+      this_month: { start: thisMonthStart, end: today },
+      last_month: { start: lastMonthStart, end: lastMonthEnd }
+    };
+  };
+
+  const isPresetActive = (key) => {
+    const presets = getDatePresetRanges();
+    const target = presets[key];
+    if (!target) return false;
+    return startDate === target.start && endDate === target.end;
+  };
+
+  const applyDatePreset = (key) => {
+    const presets = getDatePresetRanges();
+    const target = presets[key];
+    if (!target) return;
+    if (startDate === target.start && endDate === target.end) {
+      setStartDate('');
+      setEndDate('');
+    } else {
+      setStartDate(target.start);
+      setEndDate(target.end);
+    }
+  };
 
   const searchInputRef = useRef(null);
 
@@ -231,7 +281,6 @@ export function Transactions({ onNavigate }) {
       if (categoryId) params.append('category_id', categoryId);
       if (vendorId) params.append('vendor_id', vendorId);
       if (paymentStatus) params.append('payment_status', paymentStatus);
-      if (approvalStatus) params.append('approval_status', approvalStatus);
       if (paymentMethod) params.append('payment_method', paymentMethod);
       if (startDate) params.append('start_date', startDate);
       if (endDate) params.append('end_date', endDate);
@@ -272,7 +321,7 @@ export function Transactions({ onNavigate }) {
       fetchTransactions(1, search);
     }, 120);
     return () => clearTimeout(timer);
-  }, [search, categoryId, vendorId, paymentStatus, approvalStatus, paymentMethod, startDate, endDate, sortBy]);
+  }, [search, categoryId, vendorId, paymentStatus, paymentMethod, startDate, endDate, sortBy]);
 
   const handleSearchSubmit = (e) => {
     if (e) e.preventDefault();
@@ -284,7 +333,6 @@ export function Transactions({ onNavigate }) {
     setCategoryId('');
     setVendorId('');
     setPaymentStatus('');
-    setApprovalStatus('');
     setPaymentMethod('');
     setStartDate('');
     setEndDate('');
@@ -561,7 +609,7 @@ export function Transactions({ onNavigate }) {
         </form>
 
         {/* Filter Controls Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 text-xs">
           {/* Category */}
           <select
             value={categoryId}
@@ -600,19 +648,6 @@ export function Transactions({ onNavigate }) {
             <option value="unpaid">{t('ps_unpaid')}</option>
           </select>
 
-          {/* Approval Status */}
-          <select
-            value={approvalStatus}
-            onChange={(e) => setApprovalStatus(e.target.value)}
-            className="p-2 rounded-xl border border-slate-300 bg-white"
-          >
-            <option value="">{lang === 'gu' ? 'મંજૂરી સ્થિતિ' : 'All Approvals'}</option>
-            <option value="approved">{t('as_approved')}</option>
-            <option value="pending_approval">{t('as_pending_approval')}</option>
-            <option value="rejected">{t('as_rejected')}</option>
-            <option value="voided">{t('as_voided')}</option>
-          </select>
-
           {/* Payment Method */}
           <select
             value={paymentMethod}
@@ -640,22 +675,74 @@ export function Transactions({ onNavigate }) {
         </div>
 
         {/* Date Filter row */}
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="text-slate-500 font-semibold">{t('th_date')}:</span>
             <input
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-              className="p-1.5 rounded-lg border border-slate-300"
+              className="p-1.5 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-amber-500 text-xs"
             />
             <span className="text-slate-400">to</span>
             <input
               type="date"
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
-              className="p-1.5 rounded-lg border border-slate-300"
+              className="p-1.5 rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-1 focus:ring-amber-500 text-xs"
             />
+
+            {/* Direct date preset buttons */}
+            <div className="inline-flex items-center gap-1 ml-1 sm:ml-2 p-0.5 bg-slate-100 rounded-xl border border-slate-200">
+              <button
+                type="button"
+                onClick={() => applyDatePreset('today')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${
+                  isPresetActive('today')
+                    ? 'bg-amber-500 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-amber-900 hover:bg-white'
+                }`}
+                title={lang === 'gu' ? 'આજની તારીખ' : 'Today'}
+              >
+                {t('lbl_date_today')}
+              </button>
+              <button
+                type="button"
+                onClick={() => applyDatePreset('last_week')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${
+                  isPresetActive('last_week')
+                    ? 'bg-amber-500 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-amber-900 hover:bg-white'
+                }`}
+                title={lang === 'gu' ? 'છેલ્લા ૭ દિવસ' : 'Last 7 days'}
+              >
+                {t('lbl_date_last_week')}
+              </button>
+              <button
+                type="button"
+                onClick={() => applyDatePreset('last_month')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${
+                  isPresetActive('last_month')
+                    ? 'bg-amber-500 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-amber-900 hover:bg-white'
+                }`}
+                title={lang === 'gu' ? 'ગયા મહિનાના બિલો' : 'Previous month'}
+              >
+                {t('lbl_date_last_month')}
+              </button>
+              <button
+                type="button"
+                onClick={() => applyDatePreset('this_month')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${
+                  isPresetActive('this_month')
+                    ? 'bg-amber-500 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-amber-900 hover:bg-white'
+                }`}
+                title={lang === 'gu' ? 'ચાલુ મહિનો' : 'This month'}
+              >
+                {t('lbl_date_this_month')}
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center gap-3">

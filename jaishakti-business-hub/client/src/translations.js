@@ -239,6 +239,9 @@ export const translations = {
     // Quick Entry Enhancements
     lbl_quick_categories: "Quick 1-Tap Category",
     lbl_date_today: "Today",
+    lbl_date_last_week: "Last Week",
+    lbl_date_this_month: "This Month",
+    lbl_date_last_month: "Last Month",
     lbl_date_yesterday: "Yesterday",
     lbl_date_custom: "Other Date",
     lbl_quick_vendor: "Vendor / Supplier (Optional)",
@@ -645,6 +648,9 @@ export const translations = {
     // Quick Entry Enhancements
     lbl_quick_categories: "ઝડપી ૧-ક્લિક કેટેગરી",
     lbl_date_today: "આજે",
+    lbl_date_last_week: "છેલ્લું અઠવાડિયું",
+    lbl_date_this_month: "આ મહિનો",
+    lbl_date_last_month: "છેલ્લો મહિનો",
     lbl_date_yesterday: "ગઈકાલે",
     lbl_date_custom: "તારીખ પસંદ કરો",
     lbl_quick_vendor: "વેપારી પસંદ કરો (મરજિયાત)",
