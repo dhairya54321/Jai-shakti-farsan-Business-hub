@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useLanguage } from '../context/LanguageContext';
 import apiFetch from '../api';
 import {
@@ -65,6 +65,16 @@ const RAW_MATERIAL_CATEGORIES = [
 function matchItemToRawMaterial(desc, materials = []) {
   if (!desc || !materials || materials.length === 0) return null;
   const d = desc.toLowerCase().trim();
+
+  // 1. Direct equality or substring match with material names
+  const directMatch = materials.find(m => {
+    const me = (m.name_en || '').toLowerCase().trim();
+    const mg = (m.name_gu || '').trim();
+    if (me && (d === me || d.includes(me) || (d.length >= 3 && me.includes(d)))) return true;
+    if (mg && (d === mg || d.includes(mg) || (d.length >= 2 && mg.includes(d)))) return true;
+    return false;
+  });
+  if (directMatch) return directMatch;
 
   const rules = [
     { id: 'rm_sugar_pulverised_25kg', terms: ['pulverised', 'pulverized', 'દળેલી ખાંડ', 'sugar pulverised', 'powder 25', 'powder (25kg)', 'powder.(25kg)', 'pulverised powder'] },
@@ -552,6 +562,87 @@ export function BillOcrModal({ isOpen, onClose, onBillSaved, vendors = [] }) {
     } finally {
       setCreatingMaterial(false);
     }
+  };
+
+  const itemsTotalSum = useMemo(() => {
+    return inwardStockItems.reduce((acc, it) => {
+      const amt = parseFloat(it.amount);
+      if (!isNaN(amt)) return acc + amt;
+      const q = parseFloat(it.quantity);
+      const r = parseFloat(it.rate);
+      if (!isNaN(q) && !isNaN(r)) return acc + (q * r);
+      return acc;
+    }, 0);
+  }, [inwardStockItems]);
+
+  const handleUpdateItemField = (idx, field, value) => {
+    setInwardStockItems(prev => {
+      const next = [...prev];
+      const current = { ...next[idx], [field]: value };
+
+      if (field === 'detected_desc') {
+        const val = String(value || '').trim();
+        const matched = matchItemToRawMaterial(val, availableMaterials);
+        if (matched) {
+          current.raw_material_id = matched.id;
+          current.material_name = `${matched.name_gu} (${matched.name_en})`;
+          if (!current.unit) {
+            current.unit = matched.primary_unit || 'kg';
+          }
+        }
+      }
+
+      if (field === 'raw_material_id') {
+        const sel = availableMaterials.find(m => m.id === value);
+        if (sel) {
+          current.material_name = `${sel.name_gu} (${sel.name_en})`;
+          current.unit = sel.primary_unit || current.unit || 'kg';
+          if (!current.detected_desc || current.detected_desc === 'Manual Line Item') {
+            current.detected_desc = sel.name_en;
+          }
+        } else {
+          current.raw_material_id = '';
+          current.material_name = '';
+        }
+      }
+
+      // Auto recalculate amount if quantity or rate changed
+      if (field === 'quantity' || field === 'rate') {
+        const q = parseFloat(current.quantity);
+        const r = parseFloat(current.rate);
+        if (!isNaN(q) && !isNaN(r) && q >= 0 && r >= 0) {
+          current.amount = (q * r).toFixed(2);
+        }
+      }
+
+      // If user directly edits amount, auto recalculate rate if qty > 0
+      if (field === 'amount') {
+        const a = parseFloat(current.amount);
+        const q = parseFloat(current.quantity);
+        if (!isNaN(a) && !isNaN(q) && q > 0) {
+          current.rate = (a / q).toFixed(2);
+        }
+      }
+
+      next[idx] = current;
+      return next;
+    });
+  };
+
+  const handleAddItemRow = () => {
+    setInwardStockItems(prev => [
+      ...prev,
+      {
+        raw_material_id: '',
+        material_name: '',
+        detected_desc: '',
+        quantity: 1,
+        unit: 'kg',
+        rate: '',
+        amount: '',
+        inward_enabled: true
+      }
+    ]);
   };
 
   const handleConfirmSave = async () => {
@@ -1298,12 +1389,12 @@ export function BillOcrModal({ isOpen, onClose, onBillSaved, vendors = [] }) {
                   </div>
                   <div>
                     <h3 className="text-sm font-black text-amber-950">
-                      ૩. Detected Raw Materials for Stock Inward (કાચો માલ સ્ટોક)
+                      ૩. Detected Items & Raw Materials (કાચો માલ / સ્ટોક ઇનવર્ડ)
                     </h3>
                     <p className="text-[11px] text-amber-800">
                       {lang === 'gu'
-                        ? 'બિલમાંથી મળેલ કાચો માલ આપોઆપ વેરહાઉસ ઇન્વેન્ટરીમાં ઉમેરાશે'
-                        : 'Review item quantities and units to atomically increment physical stock'}
+                        ? 'બિલમાં દર્શાવેલ વસ્તુનું નામ, જથ્થો અને ભાવ સીધા સુધારી શકાય છે'
+                        : 'Every detail (name, quantity, rate, unit) is fully editable like an invoice before saving'}
                     </p>
                   </div>
                 </div>
@@ -1320,86 +1411,107 @@ export function BillOcrModal({ isOpen, onClose, onBillSaved, vendors = [] }) {
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setInwardStockItems([
-                        ...inwardStockItems,
-                        {
-                          raw_material_id: availableMaterials[0]?.id || '',
-                          material_name: availableMaterials[0]?.name_en || '',
-                          detected_desc: 'Manual Line Item',
-                          quantity: 1,
-                          unit: availableMaterials[0]?.primary_unit || 'bag_50kg',
-                          rate: '',
-                          amount: '',
-                          inward_enabled: true
-                        }
-                      ]);
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-white border border-amber-300 text-amber-900 font-bold text-xs hover:bg-amber-100 transition flex items-center gap-1"
+                    onClick={handleAddItemRow}
+                    className="px-3 py-1.5 rounded-xl bg-white border border-amber-300 text-amber-900 font-bold text-xs hover:bg-amber-100 transition flex items-center gap-1 shadow-xs"
                   >
-                    <Plus className="w-3.5 h-3.5" />
+                    <Plus className="w-3.5 h-3.5 text-amber-700" />
                     <span>+ Add Item Row</span>
                   </button>
                 </div>
               </div>
 
-              {/* Inward Items Table */}
-              <div className="bg-white rounded-2xl border border-amber-200 overflow-hidden shadow-sm">
+              {/* Inward Items Container */}
+              <div className="bg-white rounded-2xl border border-amber-200 overflow-hidden shadow-sm p-3">
                 {inwardStockItems.length === 0 ? (
                   <div className="p-6 text-center text-xs text-slate-500">
                     <Package className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                    <p>{lang === 'gu' ? 'કોઈ કાચો માલ ઓળખાયો નથી.' : 'No raw materials detected yet.'}</p>
+                    <p>{lang === 'gu' ? 'કોઈ વસ્તુ ઓળખાઈ નથી.' : 'No items detected yet.'}</p>
                     <p className="text-[11px] text-slate-400 mt-1">
-                      Click "+ Add Item Row" or "+ Add New Material" above to inward stock.
+                      Click "+ Add Item Row" or "+ Add New Material" above to add items.
                     </p>
                   </div>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-amber-100/70 text-amber-950 font-black border-b border-amber-200">
-                        <tr>
-                          <th className="p-2.5 w-10 text-center">Inward</th>
-                          <th className="p-2.5">Raw Material (કાચો માલ)</th>
-                          <th className="p-2.5">Detected Item</th>
-                          <th className="p-2.5 w-24">Qty</th>
-                          <th className="p-2.5 w-32">Unit (એકમ)</th>
-                          <th className="p-2.5 w-24">Rate (₹)</th>
-                          <th className="p-2.5 w-24">Total (₹)</th>
-                          <th className="p-2.5 w-10 text-center"></th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {inwardStockItems.map((item, idx) => (
-                          <tr key={idx} className={item.inward_enabled ? 'hover:bg-amber-50/30' : 'bg-slate-50 opacity-60'}>
-                            <td className="p-2.5 text-center">
+                  <>
+                    {/* MOBILE VIEW (< md): Clean Bill Voucher Cards */}
+                    <div className="block md:hidden space-y-3">
+                      {inwardStockItems.map((item, idx) => (
+                        <div
+                          key={idx}
+                          className={`p-3.5 rounded-2xl border transition-all ${
+                            item.inward_enabled
+                              ? 'bg-amber-50/20 border-amber-300 shadow-xs'
+                              : 'bg-slate-50 border-slate-200 opacity-60'
+                          }`}
+                        >
+                          {/* Card Top: Checkbox + Item Number + Trash */}
+                          <div className="flex items-center justify-between pb-2 mb-2 border-b border-amber-100">
+                            <label className="flex items-center gap-2 cursor-pointer select-none">
                               <input
                                 type="checkbox"
                                 checked={item.inward_enabled}
-                                onChange={(e) => {
-                                  const next = [...inwardStockItems];
-                                  next[idx] = { ...next[idx], inward_enabled: e.target.checked };
-                                  setInwardStockItems(next);
-                                }}
+                                onChange={(e) => handleUpdateItemField(idx, 'inward_enabled', e.target.checked)}
                                 className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
                               />
-                            </td>
-                            <td className="p-2.5">
+                              <span className="text-xs font-bold text-slate-900">
+                                {lang === 'gu' ? `આઇટમ #${idx + 1}` : `Item #${idx + 1}`}
+                              </span>
+                              {item.inward_enabled ? (
+                                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-md">
+                                  {lang === 'gu' ? 'સ્ટોક ઇનવર્ડ ઓકે' : 'Stock Inward'}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-bold text-slate-500 bg-slate-200 px-1.5 py-0.5 rounded-md">
+                                  {lang === 'gu' ? 'સ્ટોક છોડો' : 'Skip Stock'}
+                                </span>
+                              )}
+                            </label>
+
+                            <button
+                              type="button"
+                              onClick={() => setInwardStockItems(inwardStockItems.filter((_, i) => i !== idx))}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                              title="Delete Item"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+
+                          <div className="space-y-2.5">
+                            {/* Item Name on Bill (EDITABLE!) */}
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                                  <span>{lang === 'gu' ? 'વસ્તુનું નામ (બિલ મુજબ)' : 'Item Name on Bill'}</span>
+                                  <span className="text-rose-500">*</span>
+                                </label>
+                                <span className="text-[10px] text-amber-800 font-semibold bg-amber-100 px-1.5 py-0.5 rounded">
+                                  {lang === 'gu' ? 'સુધારી શકાય છે' : 'Editable'}
+                                </span>
+                              </div>
+                              <input
+                                type="text"
+                                value={item.detected_desc || ''}
+                                onChange={(e) => handleUpdateItemField(idx, 'detected_desc', e.target.value)}
+                                placeholder="દા.ત. મકાઈ વડા / Makka Vada / Thepla"
+                                className="w-full px-3 py-2 rounded-xl border border-slate-300 font-bold text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-300 bg-white"
+                              />
+                            </div>
+
+                            {/* Raw Material Inventory Mapping */}
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <label className="text-[11px] font-black text-slate-700">
+                                  {lang === 'gu' ? 'કાચો માલ લિંક કરો (ઇન્વેન્ટરી)' : 'Map to Raw Material (Inventory)'}
+                                </label>
+                              </div>
                               <div className="flex items-center gap-1.5">
                                 <select
-                                  value={item.raw_material_id}
-                                  onChange={(e) => {
-                                    const sel = availableMaterials.find(m => m.id === e.target.value);
-                                    const next = [...inwardStockItems];
-                                    next[idx] = {
-                                      ...next[idx],
-                                      raw_material_id: e.target.value,
-                                      material_name: sel ? `${sel.name_gu} (${sel.name_en})` : '',
-                                      unit: sel?.primary_unit || next[idx].unit
-                                    };
-                                    setInwardStockItems(next);
-                                  }}
-                                  className={`w-full px-2.5 py-1.5 rounded-xl border text-xs font-bold focus:outline-none focus:ring-2 focus:ring-amber-200 ${
-                                    item.raw_material_id ? 'border-slate-200 bg-white text-slate-800' : 'border-amber-400 bg-amber-50 text-amber-950 font-black'
+                                  value={item.raw_material_id || ''}
+                                  onChange={(e) => handleUpdateItemField(idx, 'raw_material_id', e.target.value)}
+                                  className={`flex-1 px-2.5 py-2 rounded-xl border text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-300 ${
+                                    item.raw_material_id
+                                      ? 'border-slate-300 bg-white text-slate-800'
+                                      : 'border-amber-400 bg-amber-50 text-amber-950 font-bold'
                                   }`}
                                 >
                                   <option value="">-- {lang === 'gu' ? 'કાચો માલ પસંદ કરો' : 'Select Raw Material'} --</option>
@@ -1409,81 +1521,261 @@ export function BillOcrModal({ isOpen, onClose, onBillSaved, vendors = [] }) {
                                     </option>
                                   ))}
                                 </select>
+
                                 <button
                                   type="button"
                                   onClick={() => handleOpenAddMaterialModal(idx, item.detected_desc)}
                                   title="Add new raw material definition"
-                                  className="px-2 py-1.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold text-[10px] shrink-0"
+                                  className="px-2.5 py-2 rounded-xl bg-amber-900 hover:bg-black text-white font-bold text-xs shrink-0 flex items-center gap-1 shadow-xs"
                                 >
-                                  + New
+                                  <Plus className="w-3.5 h-3.5 text-amber-300" />
+                                  <span>{lang === 'gu' ? 'નવું' : '+ New'}</span>
                                 </button>
                               </div>
-                            </td>
-                            <td className="p-2.5 max-w-[140px] truncate font-medium text-slate-600" title={item.detected_desc}>
-                              {item.detected_desc || '—'}
-                            </td>
-                            <td className="p-2.5">
-                              <input
-                                type="number"
-                                step="0.1"
-                                min="0.1"
-                                value={item.quantity}
-                                onChange={(e) => {
-                                  const next = [...inwardStockItems];
-                                  next[idx] = { ...next[idx], quantity: e.target.value };
-                                  setInwardStockItems(next);
-                                }}
-                                className="w-20 px-2 py-1.5 rounded-xl border border-slate-200 font-black text-amber-950 bg-white"
-                              />
-                            </td>
-                            <td className="p-2.5">
-                              <select
-                                value={item.unit}
-                                onChange={(e) => {
-                                  const next = [...inwardStockItems];
-                                  next[idx] = { ...next[idx], unit: e.target.value };
-                                  setInwardStockItems(next);
-                                }}
-                                className="w-full px-2 py-1.5 rounded-xl border border-slate-200 text-xs bg-white"
-                              >
-                                {UNIT_OPTIONS.map(u => (
-                                  <option key={u.value} value={u.value}>
-                                    {lang === 'gu' ? u.labelGu : u.labelEn}
-                                  </option>
-                                ))}
-                              </select>
-                            </td>
-                            <td className="p-2.5">
-                              <input
-                                type="number"
-                                step="0.01"
-                                placeholder="Rate"
-                                value={item.rate || ''}
-                                onChange={(e) => {
-                                  const next = [...inwardStockItems];
-                                  next[idx] = { ...next[idx], rate: e.target.value };
-                                  setInwardStockItems(next);
-                                }}
-                                className="w-20 px-2 py-1.5 rounded-xl border border-slate-200 text-xs bg-white"
-                              />
-                            </td>
-                            <td className="p-2.5 font-bold text-slate-800">
-                              {item.amount ? `₹${item.amount}` : (item.rate && item.quantity ? `₹${(parseFloat(item.rate) * parseFloat(item.quantity)).toFixed(2)}` : '—')}
-                            </td>
-                            <td className="p-2.5 text-center">
-                              <button
-                                type="button"
-                                onClick={() => setInwardStockItems(inwardStockItems.filter((_, i) => i !== idx))}
-                                className="p-1 rounded-lg text-slate-400 hover:text-rose-600 transition"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </td>
+                            </div>
+
+                            {/* 3 Columns: Qty, Unit, Rate */}
+                            <div className="grid grid-cols-3 gap-2">
+                              <div>
+                                <label className="block text-[10px] font-black text-slate-700 mb-1 text-center">
+                                  {lang === 'gu' ? 'જથ્થો (Qty)' : 'Quantity'}
+                                </label>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  min="0"
+                                  value={item.quantity}
+                                  onChange={(e) => handleUpdateItemField(idx, 'quantity', e.target.value)}
+                                  className="w-full px-2 py-1.5 rounded-xl border border-slate-300 font-black text-xs text-slate-900 bg-white text-center focus:outline-none focus:ring-2 focus:ring-amber-300"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block text-[10px] font-black text-slate-700 mb-1 text-center">
+                                  {lang === 'gu' ? 'એકમ (Unit)' : 'Unit'}
+                                </label>
+                                <select
+                                  value={item.unit}
+                                  onChange={(e) => handleUpdateItemField(idx, 'unit', e.target.value)}
+                                  className="w-full px-1.5 py-1.5 rounded-xl border border-slate-300 text-[11px] font-semibold bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
+                                >
+                                  {UNIT_OPTIONS.map(u => (
+                                    <option key={u.value} value={u.value}>
+                                      {lang === 'gu' ? u.labelGu : u.labelEn}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-[10px] font-black text-slate-700 mb-1 text-right">
+                                  {lang === 'gu' ? 'ભાવ (₹ Rate)' : 'Rate (₹)'}
+                                </label>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  placeholder="0.00"
+                                  value={item.rate || ''}
+                                  onChange={(e) => handleUpdateItemField(idx, 'rate', e.target.value)}
+                                  className="w-full px-2 py-1.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-900 bg-white text-right focus:outline-none focus:ring-2 focus:ring-amber-300"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Row Total */}
+                            <div className="flex items-center justify-between pt-1 text-xs bg-amber-100/40 px-3 py-2 rounded-xl border border-amber-200">
+                              <span className="font-bold text-amber-950">
+                                {lang === 'gu' ? 'આઇટમ રકમ (Total ₹):' : 'Line Total (₹):'}
+                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-bold text-amber-800">₹</span>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  placeholder="0.00"
+                                  value={item.amount || ''}
+                                  onChange={(e) => handleUpdateItemField(idx, 'amount', e.target.value)}
+                                  className="w-24 px-2 py-1 rounded-lg border border-amber-300 text-right font-black text-xs text-amber-950 bg-white focus:outline-none focus:ring-2 focus:ring-amber-400"
+                                />
+                              </div>
+                            </div>
+
+                            {item.inward_enabled && !item.raw_material_id && (
+                              <p className="text-[10px] text-amber-800 bg-amber-100/60 p-1.5 rounded-lg font-medium">
+                                💡 {lang === 'gu' ? 'સ્ટોક ઇનવર્ડ માટે કાચો માલ પસંદ કરો અથવા "+ નવું" પર ક્લિક કરો.' : 'Select raw material or tap "+ New" to increment physical stock.'}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* DESKTOP VIEW (>= md): Full Responsive Table */}
+                    <div className="hidden md:block overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-amber-100/70 text-amber-950 font-black border-b border-amber-200">
+                          <tr>
+                            <th className="p-2.5 w-10 text-center">Inward</th>
+                            <th className="p-2.5 min-w-[160px]">
+                              {lang === 'gu' ? 'બિલ આઇટમનું નામ' : 'Item Name (on Bill)'}
+                            </th>
+                            <th className="p-2.5 min-w-[200px]">
+                              {lang === 'gu' ? 'કાચો માલ (ઇન્વેન્ટરી)' : 'Raw Material (Stock)'}
+                            </th>
+                            <th className="p-2.5 w-20 text-center">Qty</th>
+                            <th className="p-2.5 w-28">Unit (એકમ)</th>
+                            <th className="p-2.5 w-24 text-right">Rate (₹)</th>
+                            <th className="p-2.5 w-28 text-right">Total (₹)</th>
+                            <th className="p-2.5 w-10 text-center"></th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {inwardStockItems.map((item, idx) => (
+                            <tr key={idx} className={item.inward_enabled ? 'hover:bg-amber-50/30' : 'bg-slate-50 opacity-60'}>
+                              <td className="p-2.5 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={item.inward_enabled}
+                                  onChange={(e) => handleUpdateItemField(idx, 'inward_enabled', e.target.checked)}
+                                  className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
+                                />
+                              </td>
+                              <td className="p-2.5">
+                                <input
+                                  type="text"
+                                  value={item.detected_desc || ''}
+                                  placeholder="e.g. Makka Vada, Thepla"
+                                  onChange={(e) => handleUpdateItemField(idx, 'detected_desc', e.target.value)}
+                                  className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 font-bold text-xs text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
+                                />
+                              </td>
+                              <td className="p-2.5">
+                                <div className="flex items-center gap-1.5">
+                                  <select
+                                    value={item.raw_material_id || ''}
+                                    onChange={(e) => handleUpdateItemField(idx, 'raw_material_id', e.target.value)}
+                                    className={`w-full px-2.5 py-1.5 rounded-xl border text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-amber-200 ${
+                                      item.raw_material_id ? 'border-slate-300 bg-white text-slate-800' : 'border-amber-400 bg-amber-50 text-amber-950 font-black'
+                                    }`}
+                                  >
+                                    <option value="">-- {lang === 'gu' ? 'કાચો માલ પસંદ કરો' : 'Select Raw Material'} --</option>
+                                    {availableMaterials.map(m => (
+                                      <option key={m.id} value={m.id}>
+                                        {m.name_gu} ({m.name_en})
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenAddMaterialModal(idx, item.detected_desc)}
+                                    title="Add new raw material definition"
+                                    className="px-2 py-1.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold text-[10px] shrink-0"
+                                  >
+                                    + New
+                                  </button>
+                                </div>
+                              </td>
+                              <td className="p-2.5 text-center">
+                                <input
+                                  type="number"
+                                  step="any"
+                                  min="0"
+                                  value={item.quantity}
+                                  onChange={(e) => handleUpdateItemField(idx, 'quantity', e.target.value)}
+                                  className="w-20 px-2 py-1.5 rounded-xl border border-slate-300 font-black text-slate-900 bg-white text-center focus:outline-none focus:ring-2 focus:ring-amber-300"
+                                />
+                              </td>
+                              <td className="p-2.5">
+                                <select
+                                  value={item.unit}
+                                  onChange={(e) => handleUpdateItemField(idx, 'unit', e.target.value)}
+                                  className="w-full px-2 py-1.5 rounded-xl border border-slate-300 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
+                                >
+                                  {UNIT_OPTIONS.map(u => (
+                                    <option key={u.value} value={u.value}>
+                                      {lang === 'gu' ? u.labelGu : u.labelEn}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className="p-2.5 text-right">
+                                <input
+                                  type="number"
+                                  step="any"
+                                  placeholder="0.00"
+                                  value={item.rate || ''}
+                                  onChange={(e) => handleUpdateItemField(idx, 'rate', e.target.value)}
+                                  className="w-24 px-2 py-1.5 rounded-xl border border-slate-300 text-xs font-semibold text-right bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
+                                />
+                              </td>
+                              <td className="p-2.5 text-right">
+                                <input
+                                  type="number"
+                                  step="any"
+                                  placeholder="0.00"
+                                  value={item.amount || ''}
+                                  onChange={(e) => handleUpdateItemField(idx, 'amount', e.target.value)}
+                                  className="w-24 px-2 py-1.5 rounded-xl border border-slate-300 text-xs font-black text-amber-950 text-right bg-amber-50/50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-300"
+                                />
+                              </td>
+                              <td className="p-2.5 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => setInwardStockItems(inwardStockItems.filter((_, i) => i !== idx))}
+                                  className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Section 3 Footer Summary */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 mt-3 border-t border-amber-200">
+                      <div className="flex flex-wrap items-center gap-3 text-xs">
+                        <span className="font-bold text-slate-600">
+                          {lang === 'gu' ? 'કુલ આઇટમ્સ:' : 'Total Items:'}{' '}
+                          <strong className="text-slate-900">{inwardStockItems.length}</strong>
+                        </span>
+                        <span className="text-slate-300">|</span>
+                        <span className="font-bold text-emerald-800">
+                          {lang === 'gu' ? 'સ્ટોક ઇનવર્ડ માટે:' : 'Inward to Stock:'}{' '}
+                          <strong>{inwardStockItems.filter(it => it.inward_enabled && it.raw_material_id).length}</strong>
+                        </span>
+                        <span className="text-slate-300">|</span>
+                        <span className="font-bold text-amber-950">
+                          {lang === 'gu' ? 'આઇટમ સરવાળો:' : 'Items Sum:'}{' '}
+                          <strong className="text-sm font-black text-amber-900">
+                            ₹{itemsTotalSum.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </strong>
+                        </span>
+                      </div>
+
+                      {itemsTotalSum > 0 && Math.abs(itemsTotalSum - (parseFloat(reviewFields.totalAmount) || 0)) > 0.01 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReviewFields(prev => ({
+                              ...prev,
+                              totalAmount: itemsTotalSum.toFixed(2),
+                              paidAmount: prev.paymentStatus === 'paid' ? itemsTotalSum.toFixed(2) : prev.paidAmount
+                            }));
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-xs transition shrink-0"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>
+                            {lang === 'gu'
+                              ? `બિલ ટોટલમાં લાગુ કરો (₹${itemsTotalSum.toFixed(2)})`
+                              : `Apply Items Sum to Bill Total (₹${itemsTotalSum.toFixed(2)})`}
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             </div>
