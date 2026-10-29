@@ -1550,12 +1550,14 @@ export const ExpenseService = {
     const expense = db.prepare(`
       SELECT e.*,
              c.name_en as category_name_en, c.name_gu as category_name_gu, c.icon as category_icon, c.classification as category_classification,
-             v.name as vendor_name, v.phone as vendor_phone,
+             v.name as vendor_name, v.phone as vendor_phone, v.gstin as vendor_gstin, v.category as vendor_category, v.address as vendor_address, v.city as vendor_city,
              w.name as worker_name, w.phone as worker_phone,
              u.full_name as creator_name,
              appr.full_name as approver_name,
              rej.full_name as rejector_name,
-             void_u.full_name as voider_name
+             void_u.full_name as voider_name,
+             vb.id as bill_id, vb.bill_number, vb.bill_date, vb.due_date, vb.subtotal as bill_subtotal, vb.taxable_amount as bill_taxable_amount,
+             vb.cgst, vb.sgst, vb.igst, vb.other_charges, vb.discount, vb.ocr_status, vb.ocr_confidence, vb.ocr_raw_text
       FROM expenses e
       LEFT JOIN expense_categories c ON c.id = e.category_id
       LEFT JOIN vendors v ON v.id = e.vendor_id
@@ -1564,6 +1566,7 @@ export const ExpenseService = {
       LEFT JOIN users appr ON appr.id = e.approved_by
       LEFT JOIN users rej ON rej.id = e.rejected_by
       LEFT JOIN users void_u ON void_u.id = e.voided_by
+      LEFT JOIN vendor_bills vb ON (vb.expense_id = e.id OR (vb.vendor_id = e.vendor_id AND vb.bill_number = e.invoice_number AND vb.bill_number IS NOT NULL AND vb.bill_number != ''))
       WHERE e.id = ? AND e.business_id = ?
     `).get(expenseId, businessId);
 
@@ -1587,6 +1590,20 @@ export const ExpenseService = {
       WHERE a.expense_id = ? AND a.business_id = ?
       ORDER BY a.created_at DESC
     `).all(expenseId, businessId);
+
+    // Also fetch bill attachments if linked bill exists and expense_attachments is empty
+    if (attachments.length === 0 && expense.bill_id) {
+      const billAtts = db.prepare(`
+        SELECT ba.id, ba.storage_key, ba.original_filename, ba.content_type, ba.file_size_bytes, ba.created_at,
+               u.full_name as uploaded_by_name,
+               1 as is_bill_attachment
+        FROM bill_attachments ba
+        LEFT JOIN users u ON u.id = ba.uploaded_by
+        WHERE ba.bill_id = ? AND ba.business_id = ?
+        ORDER BY ba.created_at ASC
+      `).all(expense.bill_id, businessId);
+      attachments.push(...billAtts);
+    }
 
     // Fetch audit trail
     const auditLogs = db.prepare(`
