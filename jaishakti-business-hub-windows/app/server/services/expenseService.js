@@ -1730,14 +1730,38 @@ export const ExpenseService = {
 
     const whereClause = conditions.join(' AND ');
 
-    // Count total matching
-    const countRow = db.prepare(`
-      SELECT COUNT(*) as count FROM expenses e
+    // Calculate aggregate totals across all matching transactions
+    const summaryRow = db.prepare(`
+      SELECT 
+        COUNT(*) as total_count,
+        COALESCE(SUM(e.amount), 0) as total_amount,
+        COALESCE(SUM(
+          (SELECT COALESCE(SUM(ep.amount), 0) FROM expense_payments ep WHERE ep.expense_id = e.id)
+        ), 0) as total_paid,
+        COUNT(CASE WHEN e.payment_status = 'paid' THEN 1 END) as paid_count,
+        COUNT(CASE WHEN e.payment_status = 'partially_paid' THEN 1 END) as partial_count,
+        COUNT(CASE WHEN e.payment_status = 'unpaid' OR e.payment_status IS NULL THEN 1 END) as pending_count
+      FROM expenses e
+      LEFT JOIN expense_categories c ON c.id = e.category_id
       LEFT JOIN vendors v ON v.id = e.vendor_id
       LEFT JOIN workers w ON w.id = e.worker_id
       WHERE ${whereClause}
     `).get(...params);
-    const totalCount = countRow.count;
+
+    const totalCount = summaryRow?.total_count || 0;
+    const totalBilled = Math.round(Number(summaryRow?.total_amount || 0) * 100) / 100;
+    const totalPaid = Math.round(Number(summaryRow?.total_paid || 0) * 100) / 100;
+    const totalBalanceDue = Math.max(0, Math.round((totalBilled - totalPaid) * 100) / 100);
+
+    const summary = {
+      total_count: totalCount,
+      total_amount: totalBilled,
+      total_paid: totalPaid,
+      balance_due: totalBalanceDue,
+      paid_count: summaryRow?.paid_count || 0,
+      partial_count: summaryRow?.partial_count || 0,
+      pending_count: summaryRow?.pending_count || 0
+    };
 
     // Sorting
     let orderBy = 'e.transaction_date DESC, e.created_at DESC';
@@ -1780,7 +1804,8 @@ export const ExpenseService = {
         limit,
         total: totalCount,
         totalPages: Math.ceil(totalCount / limit)
-      }
+      },
+      summary
     };
   }
 };

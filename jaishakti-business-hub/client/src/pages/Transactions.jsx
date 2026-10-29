@@ -116,6 +116,17 @@ export function Transactions({ onNavigate }) {
 
   const searchInputRef = useRef(null);
 
+  // Live Summary Aggregate State
+  const [summary, setSummary] = useState({
+    total_count: 0,
+    total_amount: 0,
+    total_paid: 0,
+    balance_due: 0,
+    paid_count: 0,
+    partial_count: 0,
+    pending_count: 0
+  });
+
   // Selected for Details Modal
   const [selectedExpense, setSelectedExpense] = useState(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
@@ -161,6 +172,21 @@ export function Transactions({ onNavigate }) {
       const res = await apiFetch(`/api/expenses?${params.toString()}`);
       if (res.expenses) setExpenses(res.expenses);
       if (res.pagination) setPagination(res.pagination);
+      if (res.summary) {
+        setSummary(res.summary);
+      } else {
+        const bTotal = (res.expenses || []).reduce((acc, x) => acc + (Number(x.amount) || 0), 0);
+        const pTotal = (res.expenses || []).reduce((acc, x) => acc + (Number(x.total_paid) || 0), 0);
+        setSummary({
+          total_count: res.pagination?.total || (res.expenses || []).length,
+          total_amount: Math.round(bTotal * 100) / 100,
+          total_paid: Math.round(pTotal * 100) / 100,
+          balance_due: Math.max(0, Math.round((bTotal - pTotal) * 100) / 100),
+          paid_count: (res.expenses || []).filter(x => x.payment_status === 'paid').length,
+          partial_count: (res.expenses || []).filter(x => x.payment_status === 'partially_paid').length,
+          pending_count: (res.expenses || []).filter(x => x.payment_status !== 'paid' && x.payment_status !== 'partially_paid').length
+        });
+      }
     } catch (err) {
       console.error('Failed to load transactions:', err);
     } finally {
@@ -312,6 +338,122 @@ export function Transactions({ onNavigate }) {
           <span>{actionNotice}</span>
         </div>
       )}
+
+      {/* Real-Time Search & Financial KPI Dashboard */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 animate-fade-in">
+        {/* Card 1: Total Billed */}
+        <div className="p-3.5 sm:p-4 rounded-2xl bg-white border border-slate-200/80 shadow-xs hover:border-slate-300 transition flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider">
+              {lang === 'gu' ? 'કુલ બિલની રકમ' : 'Total Billed'}
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
+              <Receipt className="w-4 h-4" />
+            </div>
+          </div>
+          <div>
+            <div className="text-lg sm:text-2xl font-black text-slate-900 font-mono tracking-tight">
+              {formatINR(summary.total_amount)}
+            </div>
+            <div className="text-[10px] sm:text-[11px] text-slate-400 font-medium mt-0.5 truncate">
+              {search
+                ? (lang === 'gu' ? `"${search}" ના બિલો` : `Filtered by "${search}"`)
+                : (lang === 'gu' ? 'બધા વ્યવહારોનો કુલ ખર્ચ' : 'Total of all transactions')}
+            </div>
+          </div>
+        </div>
+
+        {/* Card 2: Total Paid */}
+        <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br from-white to-emerald-50/50 border border-emerald-200/90 shadow-xs hover:border-emerald-300 transition flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className="text-[11px] sm:text-xs font-bold text-emerald-800 uppercase tracking-wider">
+              {lang === 'gu' ? 'ચૂકવેલ રકમ' : 'Total Paid'}
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+              <CheckCircle className="w-4 h-4" />
+            </div>
+          </div>
+          <div>
+            <div className="text-lg sm:text-2xl font-black text-emerald-700 font-mono tracking-tight">
+              {formatINR(summary.total_paid)}
+            </div>
+            <div className="text-[10px] sm:text-[11px] text-emerald-600 font-medium mt-0.5">
+              {summary.total_amount > 0
+                ? `${Math.round((summary.total_paid / summary.total_amount) * 100)}% ${lang === 'gu' ? 'ચૂકવાયેલ' : 'settled'}`
+                : (lang === 'gu' ? 'ચુકવણી નથી' : 'No payments')}
+            </div>
+          </div>
+        </div>
+
+        {/* Card 3: Pending Balance Due */}
+        <div className={`p-3.5 sm:p-4 rounded-2xl shadow-xs transition flex flex-col justify-between ${
+          summary.balance_due > 0
+            ? 'bg-gradient-to-br from-white to-amber-50/60 border border-amber-300/90 hover:border-amber-400'
+            : 'bg-gradient-to-br from-white to-emerald-50/40 border border-emerald-200/80 hover:border-emerald-300'
+        }`}>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className={`text-[11px] sm:text-xs font-bold uppercase tracking-wider ${
+              summary.balance_due > 0 ? 'text-amber-800' : 'text-emerald-800'
+            }`}>
+              {lang === 'gu' ? 'બાકી રકમ (ચૂકવવાની)' : 'Balance Due'}
+            </span>
+            <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+              summary.balance_due > 0 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
+            }`}>
+              {summary.balance_due > 0 ? (
+                <AlertCircle className="w-4 h-4" />
+              ) : (
+                <Check className="w-4 h-4" />
+              )}
+            </div>
+          </div>
+          <div>
+            <div className={`text-lg sm:text-2xl font-black font-mono tracking-tight ${
+              summary.balance_due > 0 ? 'text-amber-950' : 'text-emerald-700'
+            }`}>
+              {formatINR(summary.balance_due)}
+            </div>
+            <div className="text-[10px] sm:text-[11px] font-medium mt-0.5">
+              {summary.balance_due > 0 ? (
+                <span className="text-amber-700 font-semibold">
+                  {lang === 'gu' ? 'વેપારીને ચૂકવવાની બાકી' : 'Pending to clear'}
+                </span>
+              ) : (
+                <span className="text-emerald-600 font-semibold">
+                  {lang === 'gu' ? 'સંપૂર્ણ ચૂકતે (All Clear)' : 'All cleared'}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Card 4: Filtered Bills & Status */}
+        <div className="p-3.5 sm:p-4 rounded-2xl bg-white border border-slate-200/80 shadow-xs hover:border-slate-300 transition flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <span className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider">
+              {lang === 'gu' ? 'બિલોની સંખ્યા' : 'Invoices / Bills'}
+            </span>
+            <div className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+              <ListCollapse className="w-4 h-4" />
+            </div>
+          </div>
+          <div>
+            <div className="text-lg sm:text-2xl font-black text-slate-900 font-mono tracking-tight">
+              {summary.total_count} <span className="text-xs font-semibold text-slate-500 font-sans">{lang === 'gu' ? 'બિલો' : (summary.total_count === 1 ? 'Bill' : 'Bills')}</span>
+            </div>
+            <div className="flex items-center gap-1.5 mt-1 text-[10px] sm:text-[11px] font-semibold flex-wrap">
+              <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
+                {summary.paid_count} {lang === 'gu' ? 'ચૂકતે' : 'Paid'}
+              </span>
+              {(summary.pending_count > 0 || summary.partial_count > 0) && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                  {summary.pending_count + summary.partial_count} {lang === 'gu' ? 'બાકી' : 'Pending'}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Search & Filter Bar */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm space-y-3">
