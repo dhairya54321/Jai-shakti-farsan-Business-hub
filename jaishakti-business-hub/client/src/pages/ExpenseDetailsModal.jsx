@@ -1369,26 +1369,7 @@ export function ExpenseDetailsModal({
                       </div>
                     </div>
 
-                    {/* 4. Notes / Item Summary (if notes or description exist) */}
-                    {(activeRecord.notes || activeRecord.description) && (
-                      <div className="p-3 rounded-xl border border-slate-200 bg-amber-50/40 text-xs space-y-1">
-                        <div className="font-bold text-amber-900 uppercase tracking-wider text-[10px]">
-                          {lang === 'gu' ? 'બિલ નોંધ / વિગત' : 'Bill Notes & Summary'}
-                        </div>
-                        {activeRecord.description && activeRecord.description !== activeRecord.notes && (
-                          <div className="text-slate-800 font-semibold mb-1">
-                            {activeRecord.description}
-                          </div>
-                        )}
-                        {activeRecord.notes && (
-                          <div className="text-slate-700 whitespace-pre-line leading-relaxed font-sans">
-                            {activeRecord.notes}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* 5. Financial Summary Breakdown */}
+                    {/* 4. Financial Summary Breakdown */}
                     <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
                       <div className="flex items-center justify-between text-xs text-slate-600">
                         <span>{lang === 'gu' ? 'સબ-ટોટલ' : 'Subtotal'}</span>
@@ -1455,6 +1436,25 @@ export function ExpenseDetailsModal({
                         </div>
                       </div>
                     </div>
+
+                    {/* 5. Bill Notes & Summary (Positioned directly below Grand Total) */}
+                    {(activeRecord.notes || activeRecord.description) && (
+                      <div className="p-3.5 rounded-xl border border-slate-200 bg-amber-50/40 text-xs space-y-1">
+                        <div className="font-bold text-amber-900 uppercase tracking-wider text-[10px]">
+                          {lang === 'gu' ? 'બિલ નોંધ / વિગત' : 'Bill Notes & Summary'}
+                        </div>
+                        {activeRecord.description && activeRecord.description !== activeRecord.notes && (
+                          <div className="text-slate-800 font-semibold mb-1">
+                            {activeRecord.description}
+                          </div>
+                        )}
+                        {activeRecord.notes && (
+                          <div className="text-slate-700 whitespace-pre-line leading-relaxed font-sans">
+                            {activeRecord.notes}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* 6. Accounting Connection to Daily Expenses (if not linked) */}
                     {!isLinkedExpense && !currentBill?.expense_id && (
