@@ -34,6 +34,40 @@ import {
   AlertTriangle
 } from 'lucide-react';
 
+// Predetermined standard invoice units for commercial farsan & grocery bills
+export const PRESET_INVOICE_UNITS = [
+  { value: 'kg', labelEn: 'kg (Kilogram)', labelGu: 'કિલો (kg)' },
+  { value: 'gm', labelEn: 'gm (Gram)', labelGu: 'ગ્રામ (gm)' },
+  { value: 'pcs', labelEn: 'pcs (Pieces)', labelGu: 'નંગ / પીસ (pcs)' },
+  { value: 'no.', labelEn: 'no. (Number)', labelGu: 'નંબર / નંગ (no.)' },
+  { value: 'pkg', labelEn: 'pkg (Pack / Pkt)', labelGu: 'પેકેટ (pkg)' },
+  { value: 'bag', labelEn: 'bag (Bag / Katta)', labelGu: 'કટ્ટો / બોરી (bag)' },
+  { value: 'tin', labelEn: 'tin (15kg Dabba)', labelGu: '૧૫ કિલો ડબ્બો (tin)' },
+  { value: 'box', labelEn: 'box (Box / Peti)', labelGu: 'પેટી / બોક્સ (box)' },
+  { value: 'ltr', labelEn: 'ltr (Liter)', labelGu: 'લીટર (ltr)' },
+  { value: 'bottle', labelEn: 'bottle (Bottle)', labelGu: 'બોટલ (bottle)' },
+  { value: 'qtl', labelEn: 'qtl (Quintal / 100kg)', labelGu: 'ક્વિન્ટલ (qtl)' },
+  { value: 'cylinder', labelEn: 'cylinder (Gas)', labelGu: 'બાટલો (cylinder)' },
+];
+
+export function normalizeUnitValue(raw) {
+  if (!raw) return 'kg';
+  const s = String(raw).trim().toLowerCase();
+  if (['kg', 'kgs', 'kilogram', 'kilograms', 'કિલો', 'kilogra'].includes(s) || s.startsWith('kilo')) return 'kg';
+  if (['gm', 'g', 'gram', 'grams', 'ગ્રામ'].includes(s)) return 'gm';
+  if (['pcs', 'pc', 'piece', 'pieces', 'નંગ', 'પીસ'].includes(s)) return 'pcs';
+  if (['no', 'no.', 'nos', 'number', 'numbers'].includes(s)) return 'no.';
+  if (['pkg', 'pk', 'pkt', 'packet', 'pack', 'package', 'પેકેટ'].includes(s)) return 'pkg';
+  if (['bag', 'bags', 'katta', 'bori', 'કટ્ટો', 'બોરી', 'bag_50kg', 'bag_30kg', 'bag_25kg'].includes(s)) return 'bag';
+  if (['tin', 'tins', 'dabba', 'can', 'ડબ્બો', 'tin_15kg'].includes(s)) return 'tin';
+  if (['box', 'boxes', 'peti', 'પેટી', 'બોક્સ'].includes(s)) return 'box';
+  if (['ltr', 'lt', 'l', 'litre', 'liter', 'litres', 'liters', 'લીટર'].includes(s)) return 'ltr';
+  if (['bottle', 'bottles', 'બોટલ'].includes(s)) return 'bottle';
+  if (['qtl', 'qtl.', 'quintal', 'quintals', 'ક્વિન્ટલ'].includes(s)) return 'qtl';
+  if (['cylinder', 'cylinder_19kg', 'બાટલો', 'સિલિન્ડર'].includes(s)) return 'cylinder';
+  return raw;
+}
+
 // Helper to guarantee line items extraction from ocr_raw_text, notes, or descriptions
 function extractItems(currentExpense, currentBill, subtotal, grandTotal) {
   // 1. Try to read from ocr_raw_text
@@ -45,7 +79,7 @@ function extractItems(currentExpense, currentBill, subtotal, grandTotal) {
         return parsed.items.map((it) => ({
           description: it.description || 'Item',
           quantity: it.quantity != null ? it.quantity : 1,
-          unit: it.unit || '',
+          unit: it.unit ? normalizeUnitValue(it.unit) : 'kg',
           rate: it.rate != null ? Number(it.rate) : null,
           amount: it.amount != null ? Number(it.amount) : null
         }));
@@ -75,7 +109,7 @@ function extractItems(currentExpense, currentBill, subtotal, grandTotal) {
       if (match) {
         const desc = match[2].trim();
         const qty = parseFloat(match[3]) || 1;
-        const unit = (match[4] || '').trim().replace(/^(each|per)\s*/i, '');
+        const unit = normalizeUnitValue((match[4] || '').trim().replace(/^(each|per)\s*/i, '') || 'kg');
         const rate = parseFloat((match[5] || '').replace(/,/g, '')) || 0;
         const amt = match[6] ? parseFloat(match[6].replace(/,/g, '')) : Math.round(qty * rate * 100) / 100;
         if (desc && (rate > 0 || amt > 0)) {
@@ -89,7 +123,7 @@ function extractItems(currentExpense, currentBill, subtotal, grandTotal) {
       match = line.match(/^[-•*]?\s*(?:(\d+)\s*[\.\)]\s*)?([0-9.]+)\s*([A-Za-z\s]+)\s+(?:of\s+)?([^:@]+?)\s*[@|at]\s*(?:Rate)?\s*[₹Rs.]*\s*([0-9,.]+)\s*(?:per\s*[A-Za-z]+|\/[A-Za-z]+)?\s*(?:=|Amount:|\(Amount:)?\s*(?:each)?\s*[₹Rs.]*\s*([0-9,.]+)?/i);
       if (match) {
         const qty = parseFloat(match[2]) || 1;
-        const unit = (match[3] || '').trim();
+        const unit = normalizeUnitValue((match[3] || '').trim() || 'kg');
         const desc = match[4].trim();
         const rate = parseFloat((match[5] || '').replace(/,/g, '')) || 0;
         const amt = match[6] ? parseFloat(match[6].replace(/,/g, '')) : Math.round(qty * rate * 100) / 100;
@@ -104,7 +138,7 @@ function extractItems(currentExpense, currentBill, subtotal, grandTotal) {
       if (match) {
         const desc = match[1].trim();
         const qty = parseFloat(match[2]) || 1;
-        const unit = (match[3] || '').trim();
+        const unit = normalizeUnitValue((match[3] || '').trim() || 'kg');
         const amt = parseFloat(match[4].replace(/,/g, '')) || 0;
         const rate = qty > 0 ? Math.round((amt / qty) * 100) / 100 : amt;
         if (desc && amt > 0) {
@@ -134,7 +168,7 @@ function extractItems(currentExpense, currentBill, subtotal, grandTotal) {
     {
       description: fallbackDesc,
       quantity: 1,
-      unit: '',
+      unit: 'kg',
       rate: effectiveAmt,
       amount: effectiveAmt
     }
@@ -423,7 +457,7 @@ export function ExpenseDetailsModal({
         id: item.id || `item_${idx}_${Date.now()}`,
         description: item.description || '',
         quantity: item.quantity != null ? item.quantity : 1,
-        unit: item.unit || '',
+        unit: normalizeUnitValue(item.unit || 'kg'),
         rate: item.rate != null ? item.rate : 0,
         amount: item.amount != null ? item.amount : 0
       }))
@@ -468,7 +502,7 @@ export function ExpenseDetailsModal({
         id: `item_${prev.length}_${Date.now()}`,
         description: '',
         quantity: 1,
-        unit: prev[prev.length - 1]?.unit || '',
+        unit: prev[prev.length - 1]?.unit || 'kg',
         rate: 0,
         amount: 0
       }
@@ -1359,7 +1393,7 @@ export function ExpenseDetailsModal({
                             </td>
                             <td className="px-2.5 py-2 text-right">
                               {isEditing ? (
-                                <div className="flex items-center justify-end gap-1">
+                                <div className="flex items-center justify-end gap-1.5">
                                   <input
                                     type="number"
                                     step="any"
@@ -1368,16 +1402,57 @@ export function ExpenseDetailsModal({
                                     onChange={(e) => handleItemChange(idx, 'quantity', e.target.value)}
                                     className="w-16 px-1.5 py-1.5 rounded-lg border border-amber-300 text-right font-mono text-xs text-slate-900 bg-white focus:ring-1 focus:ring-amber-500 focus:outline-none"
                                   />
-                                  <input
-                                    type="text"
-                                    value={item.unit || ''}
-                                    onChange={(e) => handleItemChange(idx, 'unit', e.target.value)}
-                                    placeholder="Unit"
-                                    className="w-12 px-1 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 bg-slate-50 focus:ring-1 focus:ring-amber-500 focus:outline-none"
-                                  />
+                                  {item._isCustomUnit ? (
+                                    <div className="flex items-center gap-1">
+                                      <input
+                                        type="text"
+                                        value={item.unit || ''}
+                                        onChange={(e) => handleItemChange(idx, 'unit', e.target.value)}
+                                        placeholder="Unit"
+                                        autoFocus
+                                        className="w-20 px-1.5 py-1.5 rounded-lg border border-amber-400 text-xs font-semibold text-slate-800 bg-white focus:ring-1 focus:ring-amber-500 focus:outline-none"
+                                      />
+                                      <button
+                                        type="button"
+                                        title={lang === 'gu' ? 'યાદીમાંથી પસંદ કરો' : 'Back to preset list'}
+                                        onClick={() => {
+                                          handleItemChange(idx, '_isCustomUnit', false);
+                                          handleItemChange(idx, 'unit', 'kg');
+                                        }}
+                                        className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded text-xs"
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <select
+                                      value={normalizeUnitValue(item.unit)}
+                                      onChange={(e) => {
+                                        if (e.target.value === '__custom__') {
+                                          handleItemChange(idx, '_isCustomUnit', true);
+                                          handleItemChange(idx, 'unit', '');
+                                        } else {
+                                          handleItemChange(idx, 'unit', e.target.value);
+                                        }
+                                      }}
+                                      className="w-28 px-1.5 py-1.5 rounded-lg border border-amber-300 text-xs font-semibold text-slate-800 bg-white focus:ring-1 focus:ring-amber-500 focus:outline-none cursor-pointer"
+                                    >
+                                      {!PRESET_INVOICE_UNITS.some((u) => u.value === normalizeUnitValue(item.unit)) && item.unit && (
+                                        <option value={item.unit}>{item.unit}</option>
+                                      )}
+                                      {PRESET_INVOICE_UNITS.map((u) => (
+                                        <option key={u.value} value={u.value}>
+                                          {lang === 'gu' ? u.labelGu : u.labelEn}
+                                        </option>
+                                      ))}
+                                      <option value="__custom__">
+                                        {lang === 'gu' ? '✏️ અન્ય એકમ (Other)...' : '✏️ Other / Custom...'}
+                                      </option>
+                                    </select>
+                                  )}
                                 </div>
                               ) : (
-                                <span className="text-slate-600 font-mono">
+                                <span className="text-slate-600 font-mono font-medium">
                                   {item.quantity != null ? `${item.quantity} ${item.unit || ''}`.trim() : '1'}
                                 </span>
                               )}

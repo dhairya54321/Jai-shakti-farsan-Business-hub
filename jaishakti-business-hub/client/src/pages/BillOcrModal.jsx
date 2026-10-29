@@ -33,19 +33,45 @@ import {
 } from 'lucide-react';
 
 const UNIT_OPTIONS = [
+  { value: 'kg', labelEn: 'Kilogram (Kg)', labelGu: 'કિલો (Kg)' },
+  { value: 'gm', labelEn: 'Gram (gm)', labelGu: 'ગ્રામ (gm)' },
+  { value: 'pcs', labelEn: 'Piece (pcs / નંગ)', labelGu: 'નંગ (Piece)' },
+  { value: 'no.', labelEn: 'Number (no. / નંગ)', labelGu: 'નંબર / નંગ (no.)' },
+  { value: 'pkg', labelEn: 'Packet / Pack (pkg)', labelGu: 'પેકેટ (Pkt)' },
+  { value: 'bag', labelEn: 'Bag / Katta (કટ્ટો)', labelGu: 'કટ્ટો / બોરી' },
+  { value: 'tin', labelEn: '15kg Tin (ડબ્બો)', labelGu: '૧૫ કિલો ડબ્બો' },
   { value: 'bag_50kg', labelEn: '50kg Bag (કટ્ટો)', labelGu: '૫૦ કિલો કટ્ટો' },
   { value: 'bag_30kg', labelEn: '30kg Bag (કટ્ટો)', labelGu: '૩૦ કિલો કટ્ટો' },
   { value: 'bag_25kg', labelEn: '25kg Bag (કટ્ટો)', labelGu: '૨૫ કિલો કટ્ટો' },
   { value: 'tin_15kg', labelEn: '15kg Tin (ડબ્બો)', labelGu: '૧૫ કિલો ડબ્બો' },
   { value: 'dabba', labelEn: '15kg Dabba (ડબ્બો)', labelGu: '૧૫ કિલો ડબ્બો' },
   { value: 'katta', labelEn: 'Katta (કટ્ટો)', labelGu: 'કટ્ટો' },
-  { value: 'kg', labelEn: 'Kilogram (Kg)', labelGu: 'કિલો (Kg)' },
   { value: 'pkt', labelEn: 'Packet (પેકેટ)', labelGu: 'પેકેટ (Pkt)' },
   { value: 'piece', labelEn: 'Piece (નંગ)', labelGu: 'નંગ (Piece)' },
   { value: 'box', labelEn: 'Box (પેટી)', labelGu: 'બોક્સ / પેટી' },
+  { value: 'ltr', labelEn: 'Liter (Ltr)', labelGu: 'લીટર (Ltr)' },
+  { value: 'bottle', labelEn: 'Bottle (બોટલ)', labelGu: 'બોટલ' },
   { value: 'cylinder_19kg', labelEn: '19kg Cylinder', labelGu: '૧૯ કિલો સિલિન્ડર' },
   { value: 'qtl', labelEn: 'Quintal (૧૦૦ કિલો)', labelGu: 'ક્વિન્ટલ (૧૦૦ કિલો)' }
 ];
+
+function normalizeUnitValue(raw) {
+  if (!raw) return 'kg';
+  const s = String(raw).trim().toLowerCase();
+  if (['kg', 'kgs', 'kilogram', 'kilograms', 'કિલો', 'kilogra'].includes(s) || s.startsWith('kilo')) return 'kg';
+  if (['gm', 'g', 'gram', 'grams', 'ગ્રામ'].includes(s)) return 'gm';
+  if (['pcs', 'pc', 'piece', 'pieces', 'નંગ', 'પીસ'].includes(s)) return 'pcs';
+  if (['no', 'no.', 'nos', 'number', 'numbers'].includes(s)) return 'no.';
+  if (['pkg', 'pk', 'pkt', 'packet', 'pack', 'package', 'પેકેટ'].includes(s)) return 'pkg';
+  if (['bag', 'bags', 'katta', 'bori', 'કટ્ટો', 'બોરી'].includes(s)) return 'bag';
+  if (['tin', 'tins', 'dabba', 'can', 'ડબ્બો'].includes(s)) return 'tin';
+  if (['box', 'boxes', 'peti', 'પેટી', 'બોક્સ'].includes(s)) return 'box';
+  if (['ltr', 'lt', 'l', 'litre', 'liter', 'litres', 'liters', 'લીટર'].includes(s)) return 'ltr';
+  if (['bottle', 'bottles', 'બોટલ'].includes(s)) return 'bottle';
+  if (['qtl', 'qtl.', 'quintal', 'quintals', 'ક્વિન્ટલ'].includes(s)) return 'qtl';
+  if (['cylinder', 'cylinder_19kg', 'બાટલો', 'સિલિન્ડર'].includes(s)) return 'cylinder_19kg';
+  return raw;
+}
 
 const RAW_MATERIAL_CATEGORIES = [
   { value: 'oil', labelEn: 'Oils & Ghee', labelGu: 'તેલ અને ઘી' },
@@ -471,7 +497,7 @@ export function BillOcrModal({ isOpen, onClose, onBillSaved, vendors = [] }) {
           material_name: matchedMat ? `${matchedMat.name_gu} (${matchedMat.name_en})` : desc,
           detected_desc: desc,
           quantity: numQty,
-          unit: matchedMat?.primary_unit || it.unit || 'kg',
+          unit: matchedMat?.primary_unit || normalizeUnitValue(it.unit) || 'kg',
           rate: it.rate !== null && it.rate !== undefined ? it.rate : '',
           amount: it.amount !== null && it.amount !== undefined ? it.amount : '',
           inward_enabled: true
