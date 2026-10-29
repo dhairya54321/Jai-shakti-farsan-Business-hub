@@ -172,19 +172,20 @@ export function ExpenseDetailsModal({
   // Notice & Feedback banner
   const [notice, setNotice] = useState('');
 
-  // Edit Mode State (Whole Transaction)
+  // In-Place Edit Mode State
   const [isEditing, setIsEditing] = useState(false);
   const [editCategoryId, setEditCategoryId] = useState('');
-  const [editAmount, setEditAmount] = useState('');
   const [editPaymentMethod, setEditPaymentMethod] = useState('cash');
   const [editVendorId, setEditVendorId] = useState('');
   const [editTransactionDate, setEditTransactionDate] = useState('');
+  const [editDueDate, setEditDueDate] = useState('');
   const [editInvoiceNumber, setEditInvoiceNumber] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [editNotes, setEditNotes] = useState('');
   const [editReason, setEditReason] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState('');
+  const [editItems, setEditItems] = useState([]);
 
   // Payment Add State
   const [paymentAmount, setPaymentAmount] = useState('');
@@ -269,38 +270,41 @@ export function ExpenseDetailsModal({
   // Role permissions
   const isOwnerOrManager = ['owner', 'manager'].includes(role);
   const isDesignatedEditor = ['owner', 'manager', 'accountant'].includes(role);
-  const canEdit = isDesignatedEditor && currentExpense && currentExpense.approval_status !== 'voided';
+  const canEdit = isDesignatedEditor && (!currentExpense || currentExpense.approval_status !== 'voided');
 
   // Vendor Information
+  const effectiveVendorId = isEditing ? editVendorId : (currentExpense?.vendor_id || currentBill?.vendor_id || '');
+  const selectedVendorObj = venList.find((v) => v.id === effectiveVendorId) || vendor;
+
   const vendorName =
+    selectedVendorObj?.name ||
     currentExpense?.vendor_name ||
     currentBill?.vendor_name ||
-    vendor?.name ||
     (currentExpense?.worker_name ? currentExpense.worker_name : 'Merchant / Vendor');
 
   const vendorGstin =
+    selectedVendorObj?.gstin ||
+    selectedVendorObj?.tax_identifier ||
     currentExpense?.vendor_gstin ||
     currentBill?.vendor_gstin ||
-    vendor?.gstin ||
-    vendor?.tax_identifier ||
     '';
 
   const vendorPhone =
+    selectedVendorObj?.phone ||
     currentExpense?.vendor_phone ||
     currentBill?.vendor_phone ||
-    vendor?.phone ||
     '';
 
   const vendorAddress =
+    selectedVendorObj?.address ||
     currentExpense?.vendor_address ||
     currentBill?.vendor_address ||
-    vendor?.address ||
     '';
 
   const vendorCategory =
+    selectedVendorObj?.category ||
     currentExpense?.vendor_category ||
     currentBill?.vendor_category ||
-    vendor?.category ||
     '';
 
   // Document metadata
@@ -324,7 +328,7 @@ export function ExpenseDetailsModal({
   const approvalStatus = currentExpense?.approval_status || null;
   const ocrConfidence = currentExpense?.ocr_confidence || currentBill?.ocr_confidence || null;
 
-  // Financial Figures
+  // Financial Base Figures
   const grandTotal = currentExpense?.amount != null ? Number(currentExpense.amount) : Number(currentBill?.total_amount || 0);
   const subtotal = Number(
     currentExpense?.bill_subtotal ||
@@ -345,6 +349,24 @@ export function ExpenseDetailsModal({
   const balanceDue = currentExpense?.balance_due != null
     ? Number(currentExpense.balance_due)
     : Math.max(0, Math.round((grandTotal - totalPaid) * 100) / 100);
+
+  // Line items extraction in view mode
+  const parsedItems = extractItems(currentExpense, currentBill, subtotal, grandTotal);
+
+  // --- Live Reactive Math during In-Place Editing ---
+  const activeItems = isEditing ? editItems : parsedItems;
+
+  const liveSubtotal = isEditing
+    ? Math.round(editItems.reduce((acc, it) => acc + (parseFloat(it.amount) || 0), 0) * 100) / 100
+    : subtotal;
+
+  const liveGrandTotal = isEditing
+    ? Math.round((liveSubtotal + gstTax + otherCharges - discount) * 100) / 100
+    : grandTotal;
+
+  const liveBalanceDue = isEditing
+    ? Math.max(0, Math.round((liveGrandTotal - totalPaid) * 100) / 100)
+    : balanceDue;
 
   // Attachments resolution
   const token = localStorage.getItem('js_token') || '';
@@ -368,16 +390,191 @@ export function ExpenseDetailsModal({
   const isImage = activeAttachment?.content_type ? activeAttachment.content_type.startsWith('image/') : true;
   const isPdf = activeAttachment?.content_type === 'application/pdf';
 
-  // Line items (guaranteed to always return items for every invoice detail)
-  const parsedItems = extractItems(currentExpense, currentBill, subtotal, grandTotal);
-
   // Trigger parent updates
   const notifyParentUpdate = () => {
     if (onRefresh) onRefresh();
     if (onBillUpdated) onBillUpdated();
   };
 
-  // --- Actions ---
+  // --- In-Place Edit Handlers ---
+
+  const handleStartEditing = () => {
+    if (!currentExpense && !currentBill) return;
+    setEditCategoryId(currentExpense?.category_id || 'cat_raw_materials');
+    const initialMethod = currentExpense?.payments?.[0]?.payment_method || currentExpense?.payment_method || 'cash';
+    setEditPaymentMethod(initialMethod);
+    setEditVendorId(currentExpense?.vendor_id || currentBill?.vendor_id || '');
+    setEditTransactionDate(
+      currentExpense?.transaction_date ? currentExpense.transaction_date.slice(0, 10) : (currentBill?.bill_date ? currentBill.bill_date.slice(0, 10) : '')
+    );
+    setEditDueDate(
+      currentExpense?.due_date ? currentExpense.due_date.slice(0, 10) : (currentBill?.due_date ? currentBill.due_date.slice(0, 10) : '')
+    );
+    setEditInvoiceNumber(currentExpense?.invoice_number || currentBill?.bill_number || '');
+    setEditDescription(currentExpense?.description || currentBill?.description || '');
+    setEditNotes(currentExpense?.notes || currentBill?.notes || '');
+    setEditReason('');
+    setEditError('');
+
+    // Initialize editItems from current items with unique IDs
+    const baseItems = extractItems(currentExpense, currentBill, subtotal, grandTotal);
+    setEditItems(
+      baseItems.map((item, idx) => ({
+        id: item.id || `item_${idx}_${Date.now()}`,
+        description: item.description || '',
+        quantity: item.quantity != null ? item.quantity : 1,
+        unit: item.unit || '',
+        rate: item.rate != null ? item.rate : 0,
+        amount: item.amount != null ? item.amount : 0
+      }))
+    );
+
+    setIsEditing(true);
+  };
+
+  const handleCancelEditing = () => {
+    setIsEditing(false);
+    setEditError('');
+  };
+
+  const handleItemChange = (index, field, value) => {
+    setEditItems((prev) => {
+      const next = [...prev];
+      const item = { ...next[index], [field]: value };
+
+      if (field === 'quantity') {
+        const qtyNum = parseFloat(value) || 0;
+        const rateNum = parseFloat(item.rate) || 0;
+        item.amount = Math.round(qtyNum * rateNum * 100) / 100;
+      } else if (field === 'rate') {
+        const qtyNum = parseFloat(item.quantity) || 0;
+        const rateNum = parseFloat(value) || 0;
+        item.amount = Math.round(qtyNum * rateNum * 100) / 100;
+      } else if (field === 'amount') {
+        const amtNum = parseFloat(value) || 0;
+        const qtyNum = parseFloat(item.quantity) || 1;
+        item.rate = qtyNum > 0 ? Math.round((amtNum / qtyNum) * 100) / 100 : item.rate;
+      }
+
+      next[index] = item;
+      return next;
+    });
+  };
+
+  const handleAddItemRow = () => {
+    setEditItems((prev) => [
+      ...prev,
+      {
+        id: `item_${prev.length}_${Date.now()}`,
+        description: '',
+        quantity: 1,
+        unit: prev[prev.length - 1]?.unit || '',
+        rate: 0,
+        amount: 0
+      }
+    ]);
+  };
+
+  const handleRemoveItemRow = (index) => {
+    if (editItems.length <= 1) return;
+    setEditItems((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // Save Transaction Edit
+  const handleSaveEdit = async (e) => {
+    if (e) e.preventDefault();
+    setEditError('');
+
+    if (liveGrandTotal <= 0) {
+      setEditError(lang === 'gu' ? 'કુલ રકમ શૂન્ય અથવા વધુ હોવી જોઈએ.' : 'Total amount must be greater than zero.');
+      return;
+    }
+
+    if (currentExpense?.payments && currentExpense.payments.length > 1 && liveGrandTotal < totalPaid) {
+      setEditError(
+        lang === 'gu'
+          ? `નવી રકમ ₹${liveGrandTotal} એ પહેલેથી ચૂકવાયેલ ₹${totalPaid} કરતાં ઓછી હોઈ શકે નહીં. કૃપા કરીને ચૂકવણી હિસ્ટ્રી તપાસો.`
+          : `New amount of ₹${liveGrandTotal} cannot be less than already paid amount of ₹${totalPaid}. Please adjust payment history first.`
+      );
+      return;
+    }
+
+    if (!editReason || !editReason.trim()) {
+      setEditError(t('err_reason_required') || 'Reason for modification is mandatory');
+      return;
+    }
+
+    setSavingEdit(true);
+    try {
+      // Build clean item summary notes
+      const itemsSummaryLines = editItems
+        .filter((it) => it.description.trim())
+        .map((it) => `- ${it.description}: ${it.quantity} ${it.unit || ''} @ ${it.rate} = ${it.amount}`)
+        .join('\n');
+
+      const userNoteBody = editNotes.trim();
+      const combinedNotes = itemsSummaryLines
+        ? `${itemsSummaryLines}\n\n${userNoteBody}`.trim()
+        : userNoteBody;
+
+      const targetExpenseId = currentExpense?.id || currentBill?.expense_id;
+
+      if (targetExpenseId) {
+        const res = await apiFetch(`/api/expenses/${targetExpenseId}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            category_id: editCategoryId,
+            amount: liveGrandTotal,
+            subtotal: liveSubtotal,
+            due_date: editDueDate || null,
+            items: editItems,
+            vendor_id: editVendorId || null,
+            transaction_date: editTransactionDate,
+            invoice_number: editInvoiceNumber.trim() || null,
+            description: editDescription.trim() || null,
+            notes: combinedNotes,
+            payment_method: editPaymentMethod,
+            payment_amount: (currentExpense?.payments?.length === 1 && currentExpense?.balance_due === 0) ? liveGrandTotal : undefined,
+            reason: editReason.trim()
+          })
+        });
+        if (res.expense) {
+          setCurrentExpense(res.expense);
+        }
+      } else if (currentBill?.id) {
+        await apiFetch(`/api/vendors/bills/${currentBill.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            bill_number: editInvoiceNumber.trim() || null,
+            bill_date: editTransactionDate,
+            due_date: editDueDate || null,
+            subtotal: liveSubtotal,
+            total_amount: liveGrandTotal,
+            notes: combinedNotes,
+            items: editItems
+          })
+        });
+        setCurrentBill((prev) => ({
+          ...prev,
+          bill_number: editInvoiceNumber.trim() || prev.bill_number,
+          bill_date: editTransactionDate,
+          due_date: editDueDate,
+          subtotal: liveSubtotal,
+          total_amount: liveGrandTotal,
+          notes: combinedNotes
+        }));
+      }
+
+      setNotice(t('msg_edit_expense_success') || 'Changes saved successfully!');
+      setTimeout(() => setNotice(''), 3500);
+      setIsEditing(false);
+      notifyParentUpdate();
+    } catch (err) {
+      setEditError(err.message || 'Failed to update transaction');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
 
   // Create Daily Expense from Unlinked Bill
   const handleCreateExpense = async () => {
@@ -399,7 +596,6 @@ export function ExpenseDetailsModal({
           expense_id: res.expense.id,
           transaction_number: res.expense.transaction_number
         }));
-        // Fetch full expense details
         const fullExp = await apiFetch(`/api/expenses/${res.expense.id}`);
         if (fullExp.expense) {
           setCurrentExpense(fullExp.expense);
@@ -410,86 +606,6 @@ export function ExpenseDetailsModal({
       setLinkError(err.message || 'Failed to link bill to daily expenses');
     } finally {
       setLinkingExpense(false);
-    }
-  };
-
-  // Start Transaction Edit
-  const handleStartEditing = () => {
-    if (!currentExpense) return;
-    setEditCategoryId(currentExpense.category_id || '');
-    setEditAmount(currentExpense.amount ? String(currentExpense.amount) : '');
-    const initialMethod = currentExpense.payments?.[0]?.payment_method || currentExpense.payment_method || 'cash';
-    setEditPaymentMethod(initialMethod);
-    setEditVendorId(currentExpense.vendor_id || '');
-    setEditTransactionDate(
-      currentExpense.transaction_date ? currentExpense.transaction_date.slice(0, 10) : ''
-    );
-    setEditInvoiceNumber(currentExpense.invoice_number || '');
-    setEditDescription(currentExpense.description || '');
-    setEditNotes(currentExpense.notes || '');
-    setEditReason('');
-    setEditError('');
-    setIsEditing(true);
-  };
-
-  const handleCancelEditing = () => {
-    setIsEditing(false);
-    setEditError('');
-  };
-
-  // Save Transaction Edit
-  const handleSaveEdit = async (e) => {
-    e.preventDefault();
-    if (!currentExpense) return;
-    setEditError('');
-
-    const amtNum = parseFloat(editAmount);
-    if (isNaN(amtNum) || amtNum <= 0) {
-      setEditError(lang === 'gu' ? 'કૃપા કરીને માન્ય રકમ દાખલ કરો.' : 'Please enter a valid amount.');
-      return;
-    }
-    const alreadyPaid = currentExpense.total_paid || 0;
-    if (currentExpense.payments && currentExpense.payments.length > 1 && amtNum < alreadyPaid) {
-      setEditError(
-        lang === 'gu'
-          ? `નવી રકમ ₹${amtNum} એ પહેલેથી ચૂકવાયેલ ₹${alreadyPaid} કરતાં ઓછી હોઈ શકે નહીં. કૃપા કરીને નીચે ચૂકવણી હિસ્ટ્રીમાંથી રકમ સુધારો.`
-          : `New amount of ₹${amtNum} cannot be less than already paid amount of ₹${alreadyPaid}. Please adjust payment history first.`
-      );
-      return;
-    }
-    if (!editReason || !editReason.trim()) {
-      setEditError(t('err_reason_required') || 'Reason for modification is mandatory');
-      return;
-    }
-
-    setSavingEdit(true);
-    try {
-      const res = await apiFetch(`/api/expenses/${currentExpense.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          category_id: editCategoryId,
-          amount: amtNum,
-          vendor_id: editVendorId || null,
-          transaction_date: editTransactionDate,
-          invoice_number: editInvoiceNumber.trim() || null,
-          description: editDescription.trim() || null,
-          notes: editNotes.trim() || null,
-          payment_method: editPaymentMethod,
-          payment_amount: (currentExpense.payments?.length === 1 && currentExpense.balance_due === 0) ? amtNum : undefined,
-          reason: editReason.trim()
-        })
-      });
-      if (res.expense) {
-        setCurrentExpense(res.expense);
-      }
-      setNotice(t('msg_edit_expense_success') || 'Transaction updated successfully!');
-      setTimeout(() => setNotice(''), 3500);
-      setIsEditing(false);
-      notifyParentUpdate();
-    } catch (err) {
-      setEditError(err.message || 'Failed to update transaction');
-    } finally {
-      setSavingEdit(false);
     }
   };
 
@@ -760,6 +876,13 @@ export function ExpenseDetailsModal({
                       <span>{transactionNumber}</span>
                     </span>
                   )}
+
+                  {/* Editing Active Indicator */}
+                  {isEditing && (
+                    <span className="bg-amber-500 text-white text-[11px] font-black px-2.5 py-0.5 rounded-md shadow-sm animate-pulse">
+                      {lang === 'gu' ? 'સુધારો ચાલુ છે...' : 'EDITING MODE'}
+                    </span>
+                  )}
                 </div>
 
                 <h3 className="text-base sm:text-lg font-bold text-slate-900 mt-1">
@@ -962,7 +1085,7 @@ export function ExpenseDetailsModal({
                     )}
 
                     {/* Approve Button */}
-                    {isOwnerOrManager && currentExpense?.approval_status === 'pending_approval' && (
+                    {!isEditing && isOwnerOrManager && currentExpense?.approval_status === 'pending_approval' && (
                       <button
                         type="button"
                         onClick={handleApprove}
@@ -974,7 +1097,7 @@ export function ExpenseDetailsModal({
                     )}
 
                     {/* Reject Button */}
-                    {isOwnerOrManager && currentExpense?.approval_status === 'pending_approval' && (
+                    {!isEditing && isOwnerOrManager && currentExpense?.approval_status === 'pending_approval' && (
                       <button
                         type="button"
                         onClick={handleReject}
@@ -986,7 +1109,7 @@ export function ExpenseDetailsModal({
                     )}
 
                     {/* Void Button */}
-                    {isOwnerOrManager && currentExpense?.approval_status === 'approved' && (
+                    {!isEditing && isOwnerOrManager && currentExpense?.approval_status === 'approved' && (
                       <button
                         type="button"
                         onClick={handleVoid}
@@ -998,7 +1121,7 @@ export function ExpenseDetailsModal({
                     )}
 
                     {/* Delete Button */}
-                    {isOwnerOrManager && currentExpense && (
+                    {!isEditing && isOwnerOrManager && currentExpense && (
                       <button
                         type="button"
                         onClick={handleDelete}
@@ -1041,213 +1164,52 @@ export function ExpenseDetailsModal({
                 )}
               </div>
 
-              {/* Right Column: Detailed Invoice & Financial Breakdown OR Edit Form */}
+              {/* Right Column: In-Place Visual Cards with Live Editable Inputs */}
               <div className="lg:col-span-7 space-y-4">
-                {isEditing ? (
-                  /* Comprehensive Edit Mode Form */
-                  <form onSubmit={handleSaveEdit} className="space-y-4 p-4 bg-slate-50/80 rounded-2xl border border-amber-300 animate-fade-in text-xs">
-                    <div className="flex items-center justify-between pb-2 border-b border-amber-200">
-                      <div className="flex items-center gap-2">
-                        <div className="p-1.5 bg-amber-500 text-white rounded-lg">
-                          <Edit className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <h4 className="text-xs font-bold text-slate-900">{t('title_edit_expense') || 'Edit Transaction'}</h4>
-                          <p className="text-[11px] text-slate-500">{transactionNumber || billNumber}</p>
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-                        {role}
-                      </span>
-                    </div>
-
-                    {editError && (
-                      <div className="p-2.5 bg-red-100 text-red-800 border border-red-200 rounded-xl text-xs flex items-center gap-2 font-medium">
-                        <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-                        <span>{editError}</span>
-                      </div>
-                    )}
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {/* Category */}
-                      <div>
-                        <label className="block text-slate-700 font-bold mb-1">
-                          {t('lbl_category')} *
-                        </label>
-                        <select
-                          value={editCategoryId}
-                          onChange={(e) => setEditCategoryId(e.target.value)}
-                          className="w-full p-2.5 rounded-xl border border-slate-300 bg-white font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                          required
-                        >
-                          {catList.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {lang === 'gu' ? c.name_gu : c.name_en}
-                            </option>
-                          ))}
-                        </select>
+                {/* 1. Vendor & Invoice Header Card */}
+                <div className={`p-4 rounded-xl border transition ${isEditing ? 'border-amber-300 bg-amber-50/40 shadow-sm' : 'border-slate-200 bg-slate-50/70'} space-y-3`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        {currentExpense?.worker_name
+                          ? (lang === 'gu' ? 'કારીગર વિગત' : 'Worker Details')
+                          : (lang === 'gu' ? 'વેપારી વિગત' : 'Merchant Details')}
                       </div>
 
-                      {/* Amount */}
-                      <div>
-                        <label className="block text-slate-700 font-bold mb-1">
-                          {t('lbl_amount')} (₹) *
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0.01"
-                          value={editAmount}
-                          onChange={(e) => setEditAmount(e.target.value)}
-                          className="w-full p-2.5 rounded-xl border border-slate-300 font-black text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                          required
-                        />
-                        {currentExpense?.total_paid > 0 && (
-                          <span className="text-[10px] text-emerald-700 mt-0.5 block font-semibold">
-                            {lang === 'gu' ? 'પહેલેથી ચૂકવેલ:' : 'Already paid:'} {formatINR(currentExpense.total_paid)}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Payment Method */}
-                      <div>
-                        <label className="block text-slate-700 font-bold mb-1">
-                          {lang === 'gu' ? 'ચૂકવણી પદ્ધતિ (Payment Method)' : 'Payment Method'}
-                        </label>
-                        <select
-                          value={editPaymentMethod}
-                          onChange={(e) => setEditPaymentMethod(e.target.value)}
-                          className="w-full p-2.5 rounded-xl border border-slate-300 bg-white font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                        >
-                          <option value="upi">UPI (GPay / PhonePe / Paytm)</option>
-                          <option value="cash">{t('pm_cash') || 'Cash'}</option>
-                          <option value="bank_transfer">{t('pm_bank_transfer') || 'Bank Transfer'}</option>
-                          <option value="card">{t('pm_card') || 'Card'}</option>
-                        </select>
-                      </div>
-
-                      {/* Vendor */}
-                      <div>
-                        <label className="block text-slate-700 font-bold mb-1">
-                          {t('lbl_vendor')}
-                        </label>
-                        <select
-                          value={editVendorId}
-                          onChange={(e) => setEditVendorId(e.target.value)}
-                          className="w-full p-2.5 rounded-xl border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                        >
-                          <option value="">{t('lbl_no_vendor') || 'None'}</option>
-                          {venList.map((v) => (
-                            <option key={v.id} value={v.id}>
-                              {v.name} {v.phone ? `(${v.phone})` : ''}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Date */}
-                      <div>
-                        <label className="block text-slate-700 font-bold mb-1">
-                          {t('th_date')} *
-                        </label>
-                        <input
-                          type="date"
-                          value={editTransactionDate}
-                          onChange={(e) => setEditTransactionDate(e.target.value)}
-                          className="w-full p-2.5 rounded-xl border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                          required
-                        />
-                      </div>
-
-                      {/* Invoice Number */}
-                      <div>
-                        <label className="block text-slate-700 font-bold mb-1">
-                          {t('lbl_invoice_no')}
-                        </label>
-                        <input
-                          type="text"
-                          value={editInvoiceNumber}
-                          onChange={(e) => setEditInvoiceNumber(e.target.value)}
-                          placeholder="e.g. 1076 / INV-001"
-                          className="w-full p-2.5 rounded-xl border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-mono"
-                        />
-                      </div>
-
-                      {/* Description */}
-                      <div className="sm:col-span-2">
-                        <label className="block text-slate-700 font-bold mb-1">
-                          {t('lbl_description')}
-                        </label>
-                        <input
-                          type="text"
-                          value={editDescription}
-                          onChange={(e) => setEditDescription(e.target.value)}
-                          placeholder="Item summary or description"
-                          className="w-full p-2.5 rounded-xl border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                        />
-                      </div>
-
-                      {/* Notes */}
-                      <div className="sm:col-span-2">
-                        <label className="block text-slate-700 font-bold mb-1">
-                          {t('lbl_notes')} / {lang === 'gu' ? 'વસ્તુઓ અને જથ્થો' : 'Items & Quantities'}
-                        </label>
-                        <textarea
-                          rows={2}
-                          value={editNotes}
-                          onChange={(e) => setEditNotes(e.target.value)}
-                          placeholder="Bill notes or item breakdown"
-                          className="w-full p-2.5 rounded-xl border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-mono text-xs"
-                        />
-                      </div>
-
-                      {/* Reason for Modification (Mandatory) */}
-                      <div className="sm:col-span-2 p-3 bg-amber-50 rounded-xl border border-amber-300">
-                        <label className="block text-amber-950 font-bold mb-1 flex items-center gap-1">
-                          <span className="text-red-600">*</span>
-                          <span>{t('lbl_edit_reason_required') || 'Reason for Modification'}</span>
-                        </label>
-                        <input
-                          type="text"
-                          value={editReason}
-                          onChange={(e) => setEditReason(e.target.value)}
-                          placeholder={t('ph_edit_reason') || 'e.g. Corrected invoice number and rate'}
-                          className="w-full p-2.5 rounded-xl border border-amber-400 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-600 font-medium"
-                          required
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
-                      <button
-                        type="button"
-                        onClick={handleCancelEditing}
-                        disabled={savingEdit}
-                        className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-200 rounded-xl transition disabled:opacity-50"
-                      >
-                        {t('btn_cancel_edit') || 'Cancel'}
-                      </button>
-                      <button
-                        type="submit"
-                        disabled={savingEdit}
-                        className="px-5 py-2 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-xl transition inline-flex items-center gap-1.5 shadow-sm disabled:opacity-50"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                        <span>{savingEdit ? (lang === 'gu' ? 'સાચવી રહ્યું છે...' : 'Saving...') : (t('btn_save_changes') || 'Save Changes')}</span>
-                      </button>
-                    </div>
-                  </form>
-                ) : (
-                  <>
-                    {/* 1. Vendor & Invoice Header Card */}
-                    <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                            {currentExpense?.worker_name
-                              ? (lang === 'gu' ? 'કારીગર વિગત' : 'Worker Details')
-                              : (lang === 'gu' ? 'વેપારી વિગત' : 'Merchant Details')}
+                      {isEditing && !currentExpense?.worker_name ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mt-1.5">
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Vendor *</label>
+                            <select
+                              value={editVendorId}
+                              onChange={(e) => setEditVendorId(e.target.value)}
+                              className="w-full p-2 rounded-lg border border-amber-300 bg-white font-bold text-slate-900 text-xs focus:ring-1 focus:ring-amber-500"
+                            >
+                              <option value="">{t('lbl_no_vendor') || 'None'}</option>
+                              {venList.map((v) => (
+                                <option key={v.id} value={v.id}>
+                                  {v.name}
+                                </option>
+                              ))}
+                            </select>
                           </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Category *</label>
+                            <select
+                              value={editCategoryId}
+                              onChange={(e) => setEditCategoryId(e.target.value)}
+                              className="w-full p-2 rounded-lg border border-amber-300 bg-white font-semibold text-slate-800 text-xs focus:ring-1 focus:ring-amber-500"
+                            >
+                              {catList.map((c) => (
+                                <option key={c.id} value={c.id}>
+                                  {lang === 'gu' ? c.name_gu : c.name_en}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
                           <div className="font-bold text-slate-900 text-base mt-0.5">
                             {currentExpense?.worker_name ? currentExpense.worker_name : vendorName}
                           </div>
@@ -1261,188 +1223,312 @@ export function ExpenseDetailsModal({
                               {lang === 'gu' ? 'કારીગર ઉપાડ (Worker Advance)' : 'Worker / Karigar Advance'}
                             </div>
                           )}
-                        </div>
-
-                        {vendorGstin && !currentExpense?.worker_name && (
-                          <div className="text-right">
-                            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                              GSTIN
-                            </div>
-                            <div className="font-mono text-xs font-black text-slate-800 bg-white px-2 py-0.5 rounded border border-slate-200 mt-0.5">
-                              {vendorGstin}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {(vendorPhone || vendorAddress || currentExpense?.worker_phone) && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-200/60 text-xs text-slate-600">
-                          {(vendorPhone || currentExpense?.worker_phone) && (
-                            <div className="flex items-center gap-1.5">
-                              <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                              <span>{vendorPhone || currentExpense?.worker_phone}</span>
-                            </div>
-                          )}
-                          {vendorAddress && !currentExpense?.worker_name && (
-                            <div className="flex items-start gap-1.5">
-                              <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                              <span className="line-clamp-2">{vendorAddress}</span>
-                            </div>
-                          )}
-                        </div>
+                        </>
                       )}
                     </div>
 
-                    {/* 2. Invoice Dates & Timing (3 Metadata Boxes) */}
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                      <div className="p-3 rounded-xl border border-slate-200 bg-white">
-                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
-                          <Calendar className="w-3 h-3 text-amber-600" />
-                          <span>{lang === 'gu' ? 'બિલ તારીખ' : 'Bill Date'}</span>
-                        </div>
-                        <div className="font-bold text-slate-900 text-sm mt-1">
-                          {billDate ? formatDate(billDate) : '—'}
-                        </div>
-                      </div>
-
-                      <div className="p-3 rounded-xl border border-slate-200 bg-white">
-                        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
-                          <Clock className="w-3 h-3 text-slate-400" />
-                          <span>{lang === 'gu' ? 'ચૂકવણી મુદત' : 'Due Date'}</span>
-                        </div>
-                        <div className="font-bold text-slate-900 text-sm mt-1">
-                          {dueDate ? formatDate(dueDate) : '—'}
-                        </div>
-                      </div>
-
-                      <div className="p-3 rounded-xl border border-slate-200 bg-white col-span-2 sm:col-span-1">
+                    {vendorGstin && !currentExpense?.worker_name && (
+                      <div className="text-right shrink-0">
                         <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          {lang === 'gu' ? 'ઇનવોઇસ નંબર' : 'Invoice / Bill No'}
+                          GSTIN
                         </div>
-                        <div className="font-mono font-bold text-slate-900 text-sm mt-1">
-                          {billNumber || '—'}
+                        <div className="font-mono text-xs font-black text-slate-800 bg-white px-2 py-0.5 rounded border border-slate-200 mt-0.5">
+                          {vendorGstin}
                         </div>
                       </div>
+                    )}
+                  </div>
+
+                  {(vendorPhone || vendorAddress || currentExpense?.worker_phone) && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-200/60 text-xs text-slate-600">
+                      {(vendorPhone || currentExpense?.worker_phone) && (
+                        <div className="flex items-center gap-1.5">
+                          <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span>{vendorPhone || currentExpense?.worker_phone}</span>
+                        </div>
+                      )}
+                      {vendorAddress && !currentExpense?.worker_name && (
+                        <div className="flex items-start gap-1.5">
+                          <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                          <span className="line-clamp-2">{vendorAddress}</span>
+                        </div>
+                      )}
                     </div>
+                  )}
+                </div>
 
-                    {/* 3. Decoded Line Items Table (Always visible in every invoice detail) */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                          <Tag className="w-3.5 h-3.5 text-amber-600" />
-                          <span>{lang === 'gu' ? 'બિલની આઇટમો અને જથ્થો' : 'Purchased Items & Quantities'}</span>
-                        </h4>
-                        <span className="text-[11px] font-bold text-slate-400">
-                          {parsedItems.length} {lang === 'gu' ? 'વસ્તુઓ' : 'items'}
-                        </span>
+                {/* 2. Invoice Dates & Timing (3 Metadata Boxes) */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  <div className={`p-3 rounded-xl border bg-white transition ${isEditing ? 'border-amber-300 ring-1 ring-amber-200' : 'border-slate-200'}`}>
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                      <Calendar className="w-3 h-3 text-amber-600" />
+                      <span>{lang === 'gu' ? 'બિલ તારીખ' : 'Bill Date'}</span>
+                    </div>
+                    {isEditing ? (
+                      <input
+                        type="date"
+                        value={editTransactionDate}
+                        onChange={(e) => setEditTransactionDate(e.target.value)}
+                        className="w-full font-bold text-slate-900 text-xs mt-1 p-1 rounded border border-amber-300 bg-amber-50/50 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                        required
+                      />
+                    ) : (
+                      <div className="font-bold text-slate-900 text-sm mt-1">
+                        {billDate ? formatDate(billDate) : '—'}
                       </div>
+                    )}
+                  </div>
 
-                      <div className="overflow-x-auto rounded-xl border border-slate-200">
-                        <table className="w-full text-left text-xs">
-                          <thead className="bg-slate-50 border-b border-slate-200 font-semibold text-slate-600">
-                            <tr>
-                              <th className="px-3 py-2">{lang === 'gu' ? 'વિગત' : 'Item Description'}</th>
-                              <th className="px-3 py-2 text-right">{lang === 'gu' ? 'જથ્થો' : 'Qty'}</th>
-                              <th className="px-3 py-2 text-right">{lang === 'gu' ? 'ભાવ (₹)' : 'Rate (₹)'}</th>
-                              <th className="px-3 py-2 text-right">{lang === 'gu' ? 'કુલ (₹)' : 'Amount (₹)'}</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 bg-white">
-                            {parsedItems.map((item, idx) => (
-                              <tr key={idx} className="hover:bg-slate-50/70">
-                                <td className="px-3 py-2 font-medium text-slate-900">
-                                  {item.description}
-                                </td>
-                                <td className="px-3 py-2 text-right text-slate-600 font-mono">
+                  <div className={`p-3 rounded-xl border bg-white transition ${isEditing ? 'border-amber-300 ring-1 ring-amber-200' : 'border-slate-200'}`}>
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-slate-400" />
+                      <span>{lang === 'gu' ? 'ચૂકવણી મુદત' : 'Due Date'}</span>
+                    </div>
+                    {isEditing ? (
+                      <input
+                        type="date"
+                        value={editDueDate}
+                        onChange={(e) => setEditDueDate(e.target.value)}
+                        className="w-full font-bold text-slate-900 text-xs mt-1 p-1 rounded border border-amber-300 bg-amber-50/50 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      />
+                    ) : (
+                      <div className="font-bold text-slate-900 text-sm mt-1">
+                        {dueDate ? formatDate(dueDate) : '—'}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className={`p-3 rounded-xl border bg-white col-span-2 sm:col-span-1 transition ${isEditing ? 'border-amber-300 ring-1 ring-amber-200' : 'border-slate-200'}`}>
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      {lang === 'gu' ? 'ઇનવોઇસ નંબર' : 'Invoice / Bill No'}
+                    </div>
+                    {isEditing ? (
+                      <input
+                        type="text"
+                        value={editInvoiceNumber}
+                        onChange={(e) => setEditInvoiceNumber(e.target.value)}
+                        placeholder="e.g. 1407"
+                        className="w-full font-mono font-bold text-slate-900 text-xs mt-1 p-1 rounded border border-amber-300 bg-amber-50/50 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      />
+                    ) : (
+                      <div className="font-mono font-bold text-slate-900 text-sm mt-1">
+                        {billNumber || '—'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* 3. Decoded Line Items Table (In-Place Live Math Editing) */}
+                <div className={`space-y-2 p-3 sm:p-3.5 rounded-xl border transition ${isEditing ? 'border-amber-300 bg-amber-50/30' : 'border-transparent'}`}>
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                      <Tag className="w-3.5 h-3.5 text-amber-600" />
+                      <span>{lang === 'gu' ? 'બિલની આઇટમો અને જથ્થો' : 'Purchased Items & Quantities'}</span>
+                    </h4>
+                    <span className="text-[11px] font-bold text-slate-400">
+                      {activeItems.length} {lang === 'gu' ? 'વસ્તુઓ' : 'items'}
+                    </span>
+                  </div>
+
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 border-b border-slate-200 font-semibold text-slate-600">
+                        <tr>
+                          <th className="px-3 py-2">{lang === 'gu' ? 'વિગત' : 'Item Description'}</th>
+                          <th className="px-3 py-2 text-right">{lang === 'gu' ? 'જથ્થો' : 'Qty'}</th>
+                          <th className="px-3 py-2 text-right">{lang === 'gu' ? 'ભાવ (₹)' : 'Rate (₹)'}</th>
+                          <th className="px-3 py-2 text-right">{lang === 'gu' ? 'કુલ (₹)' : 'Amount (₹)'}</th>
+                          {isEditing && <th className="px-2 py-2 w-8 text-center"></th>}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {activeItems.map((item, idx) => (
+                          <tr key={item.id || idx} className="hover:bg-slate-50/70 transition">
+                            <td className="px-2.5 py-2">
+                              {isEditing ? (
+                                <input
+                                  type="text"
+                                  value={item.description}
+                                  onChange={(e) => handleItemChange(idx, 'description', e.target.value)}
+                                  placeholder="Item Description"
+                                  className="w-full px-2 py-1.5 rounded-lg border border-amber-300 font-medium text-xs text-slate-900 bg-white focus:ring-1 focus:ring-amber-500 focus:outline-none"
+                                />
+                              ) : (
+                                <span className="font-medium text-slate-900">{item.description}</span>
+                              )}
+                            </td>
+                            <td className="px-2.5 py-2 text-right">
+                              {isEditing ? (
+                                <div className="flex items-center justify-end gap-1">
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    min="0"
+                                    value={item.quantity}
+                                    onChange={(e) => handleItemChange(idx, 'quantity', e.target.value)}
+                                    className="w-16 px-1.5 py-1.5 rounded-lg border border-amber-300 text-right font-mono text-xs text-slate-900 bg-white focus:ring-1 focus:ring-amber-500 focus:outline-none"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={item.unit || ''}
+                                    onChange={(e) => handleItemChange(idx, 'unit', e.target.value)}
+                                    placeholder="Unit"
+                                    className="w-12 px-1 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 bg-slate-50 focus:ring-1 focus:ring-amber-500 focus:outline-none"
+                                  />
+                                </div>
+                              ) : (
+                                <span className="text-slate-600 font-mono">
                                   {item.quantity != null ? `${item.quantity} ${item.unit || ''}`.trim() : '1'}
-                                </td>
-                                <td className="px-3 py-2 text-right text-slate-600 font-mono">
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-2.5 py-2 text-right">
+                              {isEditing ? (
+                                <input
+                                  type="number"
+                                  step="any"
+                                  min="0"
+                                  value={item.rate}
+                                  onChange={(e) => handleItemChange(idx, 'rate', e.target.value)}
+                                  className="w-20 px-2 py-1.5 rounded-lg border border-amber-300 text-right font-mono text-xs text-slate-900 bg-white focus:ring-1 focus:ring-amber-500 focus:outline-none"
+                                />
+                              ) : (
+                                <span className="text-slate-600 font-mono">
                                   {item.rate != null ? formatINR(item.rate) : '—'}
-                                </td>
-                                <td className="px-3 py-2 text-right font-black text-slate-900 font-mono">
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-2.5 py-2 text-right font-black font-mono">
+                              {isEditing ? (
+                                <input
+                                  type="number"
+                                  step="any"
+                                  min="0"
+                                  value={item.amount}
+                                  onChange={(e) => handleItemChange(idx, 'amount', e.target.value)}
+                                  className="w-24 px-2 py-1.5 rounded-lg border border-amber-400 bg-amber-50/70 text-right font-mono font-bold text-xs text-slate-900 focus:ring-1 focus:ring-amber-500 focus:outline-none"
+                                />
+                              ) : (
+                                <span className="text-slate-900">
                                   {item.amount != null ? formatINR(item.amount) : '—'}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                                </span>
+                              )}
+                            </td>
+                            {isEditing && (
+                              <td className="px-2 py-2 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveItemRow(idx)}
+                                  disabled={editItems.length === 1}
+                                  className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition disabled:opacity-20"
+                                  title="Delete item"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {isEditing && (
+                    <button
+                      type="button"
+                      onClick={handleAddItemRow}
+                      className="mt-1 px-3 py-1.5 rounded-xl border border-dashed border-amber-400 text-amber-900 bg-amber-50/60 hover:bg-amber-100/80 text-xs font-bold inline-flex items-center gap-1.5 transition shadow-sm"
+                    >
+                      <Plus className="w-3.5 h-3.5 text-amber-600" />
+                      <span>{lang === 'gu' ? 'નવી આઇટમ ઉમેરો' : 'Add Item'}</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* 4. Financial Summary Breakdown */}
+                <div className={`p-4 rounded-xl border transition ${isEditing ? 'border-amber-300 bg-amber-50/20 shadow-sm' : 'border-slate-200 bg-slate-50'} space-y-2`}>
+                  <div className="flex items-center justify-between text-xs text-slate-600">
+                    <span>{lang === 'gu' ? 'સબ-ટોટલ' : 'Subtotal'}</span>
+                    <span className="font-mono font-semibold">
+                      {formatINR(liveSubtotal)}
+                    </span>
+                  </div>
+
+                  {gstTax > 0 && (
+                    <div className="flex items-center justify-between text-xs text-slate-600">
+                      <span>{lang === 'gu' ? 'GST (CGST + SGST)' : 'GST Tax'}</span>
+                      <span className="font-mono font-semibold">
+                        {formatINR(gstTax)}
+                      </span>
                     </div>
+                  )}
 
-                    {/* 4. Financial Summary Breakdown */}
-                    <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-                      <div className="flex items-center justify-between text-xs text-slate-600">
-                        <span>{lang === 'gu' ? 'સબ-ટોટલ' : 'Subtotal'}</span>
-                        <span className="font-mono font-semibold">
-                          {formatINR(subtotal)}
-                        </span>
-                      </div>
-
-                      {gstTax > 0 && (
-                        <div className="flex items-center justify-between text-xs text-slate-600">
-                          <span>{lang === 'gu' ? 'GST (CGST + SGST)' : 'GST Tax'}</span>
-                          <span className="font-mono font-semibold">
-                            {formatINR(gstTax)}
-                          </span>
-                        </div>
-                      )}
-
-                      {discount > 0 && (
-                        <div className="flex items-center justify-between text-xs text-emerald-700">
-                          <span>{lang === 'gu' ? 'ડિસ્કાઉન્ટ' : 'Discount'}</span>
-                          <span className="font-mono font-semibold">-{formatINR(discount)}</span>
-                        </div>
-                      )}
-
-                      {otherCharges > 0 && (
-                        <div className="flex items-center justify-between text-xs text-slate-600">
-                          <span>{lang === 'gu' ? 'અન્ય ચાર્જ' : 'Other Charges'}</span>
-                          <span className="font-mono font-semibold">+{formatINR(otherCharges)}</span>
-                        </div>
-                      )}
-
-                      <div className="pt-2 border-t border-slate-200 flex items-baseline justify-between">
-                        <div>
-                          <span className="text-sm font-black text-slate-900">
-                            {lang === 'gu' ? 'કુલ બિલ રકમ' : 'Grand Total'}
-                          </span>
-                          <span className="text-[10px] text-slate-400 block">
-                            {paymentStatus === 'paid'
-                              ? (lang === 'gu' ? 'સંપૂર્ણ ચૂકવાયેલ' : 'Fully Paid')
-                              : (lang === 'gu' ? 'ચૂકવવાપાત્ર બાકી' : 'Payment Due')}
-                          </span>
-                        </div>
-                        <span className="text-xl sm:text-2xl font-black text-amber-700 font-mono">
-                          {formatINR(grandTotal)}
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200/80 text-xs">
-                        <div>
-                          <span className="text-slate-400 text-[10px] uppercase font-bold block">
-                            {lang === 'gu' ? 'ચૂકવેલ રકમ' : 'Paid Amount'}
-                          </span>
-                          <span className="font-mono font-bold text-emerald-700 text-sm">
-                            {formatINR(totalPaid)}
-                          </span>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-slate-400 text-[10px] uppercase font-bold block">
-                            {lang === 'gu' ? 'બાકી રકમ' : 'Balance Due'}
-                          </span>
-                          <span className="font-mono font-black text-rose-700 text-sm">
-                            {formatINR(balanceDue)}
-                          </span>
-                        </div>
-                      </div>
+                  {discount > 0 && (
+                    <div className="flex items-center justify-between text-xs text-emerald-700">
+                      <span>{lang === 'gu' ? 'ડિસ્કાઉન્ટ' : 'Discount'}</span>
+                      <span className="font-mono font-semibold">-{formatINR(discount)}</span>
                     </div>
+                  )}
 
-                    {/* 5. Bill Notes & Summary (Positioned directly below Grand Total) */}
-                    {(activeRecord.notes || activeRecord.description) && (
-                      <div className="p-3.5 rounded-xl border border-slate-200 bg-amber-50/40 text-xs space-y-1">
-                        <div className="font-bold text-amber-900 uppercase tracking-wider text-[10px]">
-                          {lang === 'gu' ? 'બિલ નોંધ / વિગત' : 'Bill Notes & Summary'}
-                        </div>
+                  {otherCharges > 0 && (
+                    <div className="flex items-center justify-between text-xs text-slate-600">
+                      <span>{lang === 'gu' ? 'અન્ય ચાર્જ' : 'Other Charges'}</span>
+                      <span className="font-mono font-semibold">+{formatINR(otherCharges)}</span>
+                    </div>
+                  )}
+
+                  <div className="pt-2 border-t border-slate-200 flex items-baseline justify-between">
+                    <div>
+                      <span className="text-sm font-black text-slate-900">
+                        {lang === 'gu' ? 'કુલ બિલ રકમ' : 'Grand Total'}
+                      </span>
+                      <span className="text-[10px] text-slate-400 block">
+                        {paymentStatus === 'paid'
+                          ? (lang === 'gu' ? 'સંપૂર્ણ ચૂકવાયેલ' : 'Fully Paid')
+                          : (lang === 'gu' ? 'ચૂકવવાપાત્ર બાકી' : 'Payment Due')}
+                      </span>
+                    </div>
+                    <span className="text-xl sm:text-2xl font-black text-amber-700 font-mono">
+                      {formatINR(liveGrandTotal)}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200/80 text-xs">
+                    <div>
+                      <span className="text-slate-400 text-[10px] uppercase font-bold block">
+                        {lang === 'gu' ? 'ચૂકવેલ રકમ' : 'Paid Amount'}
+                      </span>
+                      <span className="font-mono font-bold text-emerald-700 text-sm">
+                        {formatINR(totalPaid)}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-slate-400 text-[10px] uppercase font-bold block">
+                        {lang === 'gu' ? 'બાકી રકમ' : 'Balance Due'}
+                      </span>
+                      <span className="font-mono font-black text-rose-700 text-sm">
+                        {formatINR(liveBalanceDue)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. Bill Notes & Summary (Positioned directly below Grand Total) */}
+                {(activeRecord.notes || activeRecord.description || isEditing) && (
+                  <div className={`p-3.5 rounded-xl border transition ${isEditing ? 'border-amber-300 bg-amber-50/60 shadow-sm' : 'border-slate-200 bg-amber-50/40'} text-xs space-y-1.5`}>
+                    <div className="font-bold text-amber-900 uppercase tracking-wider text-[10px]">
+                      {lang === 'gu' ? 'બિલ નોંધ / વિગત' : 'Bill Notes & Summary'}
+                    </div>
+                    {isEditing ? (
+                      <textarea
+                        rows={3}
+                        value={editNotes}
+                        onChange={(e) => setEditNotes(e.target.value)}
+                        placeholder="Additional bill notes or remarks..."
+                        className="w-full p-2.5 rounded-xl border border-amber-300 bg-white font-mono text-xs text-slate-800 focus:ring-1 focus:ring-amber-500 focus:outline-none"
+                      />
+                    ) : (
+                      <>
                         {activeRecord.description && activeRecord.description !== activeRecord.notes && (
                           <div className="text-slate-800 font-semibold mb-1">
                             {activeRecord.description}
@@ -1453,300 +1539,349 @@ export function ExpenseDetailsModal({
                             {activeRecord.notes}
                           </div>
                         )}
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* 6. Save & Reason Bar (Prominent in-place action card when editing) */}
+                {isEditing && (
+                  <div className="p-4 rounded-xl border border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50/40 space-y-3 animate-fade-in shadow-sm">
+                    {editError && (
+                      <div className="p-2.5 bg-rose-100 text-rose-800 border border-rose-200 rounded-lg text-xs flex items-center gap-2 font-medium">
+                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>{editError}</span>
                       </div>
                     )}
 
-                    {/* 6. Accounting Connection to Daily Expenses (if not linked) */}
-                    {!isLinkedExpense && !currentBill?.expense_id && (
-                      <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                            {lang === 'gu' ? 'દૈનિક ખર્ચ હિસાબ' : 'Daily Expense Accounting'}
+                    <div>
+                      <label className="block text-amber-950 font-bold text-xs mb-1 flex items-center gap-1">
+                        <span className="text-red-600">*</span>
+                        <span>{t('lbl_edit_reason_required') || (lang === 'gu' ? 'સુધારવાનું કારણ (ફરજિયાત)' : 'Reason for Modification (Required)')}</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={editReason}
+                        onChange={(e) => setEditReason(e.target.value)}
+                        placeholder={t('ph_edit_reason') || 'e.g. Corrected quantity and rate from original bill'}
+                        className="w-full p-2.5 rounded-xl border border-amber-400 bg-white text-slate-900 font-medium text-xs focus:ring-2 focus:ring-amber-500/30 focus:border-amber-600 focus:outline-none"
+                        required
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-1 border-t border-amber-200">
+                      <button
+                        type="button"
+                        onClick={handleCancelEditing}
+                        disabled={savingEdit}
+                        className="px-4 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-xl transition"
+                      >
+                        {t('btn_cancel_edit') || 'Cancel'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveEdit}
+                        disabled={savingEdit}
+                        className="px-5 py-2 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-xl transition inline-flex items-center gap-1.5 shadow-md shadow-amber-600/20"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>{savingEdit ? (lang === 'gu' ? 'સાચવી રહ્યું છે...' : 'Saving...') : (t('btn_save_changes') || 'Save Changes')}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 7. Accounting Connection to Daily Expenses (if not linked) */}
+                {!isEditing && !isLinkedExpense && !currentBill?.expense_id && (
+                  <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                        {lang === 'gu' ? 'દૈનિક ખર્ચ હિસાબ' : 'Daily Expense Accounting'}
+                      </div>
+                      <div className="text-xs text-slate-600 mt-0.5">
+                        {lang === 'gu'
+                          ? 'આ બિલ હજુ દૈનિક ખર્ચ ખાતાવહીમાં ઉમેરાયું નથી.'
+                          : 'This bill is not recorded in the daily expense ledger yet.'}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleCreateExpense}
+                      disabled={linkingExpense || linkSuccess}
+                      className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:bg-emerald-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition"
+                    >
+                      {linkingExpense ? (
+                        <span>{lang === 'gu' ? 'ઉમેરાઈ રહ્યું છે...' : 'Recording...'}</span>
+                      ) : linkSuccess ? (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          <span>{lang === 'gu' ? 'ઉમેરાઈ ગયું!' : 'Recorded!'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>{lang === 'gu' ? 'દૈનિક ખર્ચમાં ઉમેરો' : 'Record to Daily Expenses'}</span>
+                        </>
+                      )}
+                    </button>
+
+                    {linkError && (
+                      <div className="w-full text-xs text-rose-700 flex items-center gap-1 font-semibold">
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        <span>{linkError}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 8. Installment Payments & Payment History (Shown in view mode) */}
+                {!isEditing && (
+                  <div className="space-y-3 pt-1">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                        <CreditCard className="w-3.5 h-3.5 text-amber-600" />
+                        <span>{lang === 'gu' ? 'ચૂકવણી હિસ્ટ્રી' : 'Payment History'} ({currentExpense?.payments?.length || (totalPaid > 0 ? 1 : 0)})</span>
+                      </h4>
+                    </div>
+
+                    {paymentActionError && (
+                      <div className="p-2.5 bg-rose-50 text-rose-800 border border-rose-200 rounded-xl text-xs flex items-center gap-2 font-medium">
+                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>{paymentActionError}</span>
+                      </div>
+                    )}
+
+                    {/* Payment rows */}
+                    {currentExpense?.payments && currentExpense.payments.length > 0 ? (
+                      <div className="space-y-2">
+                        {currentExpense.payments.map((p) => {
+                          const isItemEditing = editingPaymentId === p.id;
+                          if (isItemEditing) {
+                            return (
+                              <div key={p.id} className="p-3.5 rounded-xl bg-amber-50/90 border border-amber-300 space-y-3 animate-fade-in text-xs shadow-sm">
+                                <div className="flex items-center justify-between font-bold text-amber-950 pb-1.5 border-b border-amber-200/70">
+                                  <span className="flex items-center gap-1.5">
+                                    <Edit className="w-3.5 h-3.5 text-amber-700" />
+                                    <span>{lang === 'gu' ? 'ચૂકવણી સુધારો' : 'Edit Payment Details'}</span>
+                                  </span>
+                                  <span className="text-[10px] text-slate-500 font-mono">ID: {p.id.slice(0, 10)}...</span>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                                  <div>
+                                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                                      {t('lbl_amount')} (₹) *
+                                    </label>
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0.01"
+                                      value={editPayAmount}
+                                      onChange={(e) => setEditPayAmount(e.target.value)}
+                                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                                      required
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                                      {lang === 'gu' ? 'ચૂકવણી પદ્ધતિ' : 'Payment Method'} *
+                                    </label>
+                                    <select
+                                      value={editPayMethod}
+                                      onChange={(e) => setEditPayMethod(e.target.value)}
+                                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                                    >
+                                      <option value="upi">UPI (GPay / PhonePe / Paytm)</option>
+                                      <option value="cash">{t('pm_cash') || 'Cash'}</option>
+                                      <option value="bank_transfer">{t('pm_bank_transfer') || 'Bank Transfer'}</option>
+                                      <option value="card">{t('pm_card') || 'Card'}</option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
+                                      {lang === 'gu' ? 'ચૂકવણી તારીખ' : 'Payment Date'} *
+                                    </label>
+                                    <input
+                                      type="date"
+                                      value={editPayDate}
+                                      onChange={(e) => setEditPayDate(e.target.value)}
+                                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                                      required
+                                    />
+                                  </div>
+                                </div>
+                                <div className="flex items-center justify-end gap-2 pt-1 border-t border-amber-200/50">
+                                  <button
+                                    type="button"
+                                    onClick={handleCancelEditPayment}
+                                    disabled={savingPaymentAction}
+                                    className="px-3 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold transition"
+                                  >
+                                    {lang === 'gu' ? 'રદ કરો' : 'Cancel'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSavePayment(p.id)}
+                                    disabled={savingPaymentAction}
+                                    className="px-3.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-sm flex items-center gap-1.5"
+                                  >
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>{savingPaymentAction ? 'Saving...' : (lang === 'gu' ? 'સાચવો' : 'Save')}</span>
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          const methodBadgeColor = p.payment_method === 'upi'
+                            ? 'bg-blue-100 text-blue-800 border-blue-200'
+                            : p.payment_method === 'cash'
+                            ? 'bg-slate-100 text-slate-800 border-slate-200'
+                            : p.payment_method === 'bank_transfer'
+                            ? 'bg-purple-100 text-purple-800 border-purple-200'
+                            : 'bg-amber-100 text-amber-800 border-amber-200';
+
+                          return (
+                            <div key={p.id} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 text-xs hover:border-slate-300 transition">
+                              <div className="flex items-center gap-2.5">
+                                <div className="flex flex-col">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-extrabold text-slate-900 text-sm">{formatINR(p.amount)}</span>
+                                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border uppercase tracking-wider ${methodBadgeColor}`}>
+                                      {p.payment_method === 'upi' ? 'UPI' : p.payment_method}
+                                    </span>
+                                  </div>
+                                  {p.reference_number && (
+                                    <span className="text-[11px] text-slate-400 mt-0.5">Ref: {p.reference_number}</span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <div className="text-right text-[11px] text-slate-500">
+                                  <div className="font-medium text-slate-700">{formatDate(p.payment_date)}</div>
+                                  <div className="text-[10px] text-slate-400">By: {p.recorded_by_name}</div>
+                                </div>
+                                {isOwnerOrManager && currentExpense.approval_status !== 'voided' && (
+                                  <div className="flex items-center gap-1 pl-2 border-l border-slate-200">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleStartEditPayment(p)}
+                                      className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition"
+                                      title={lang === 'gu' ? 'ચૂકવણી સુધારો' : 'Edit Payment'}
+                                    >
+                                      <Edit className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeletePayment(p.id, p.amount, p.payment_method)}
+                                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                                      title={lang === 'gu' ? 'ચૂકવણી રદ કરો' : 'Delete Payment'}
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : totalPaid > 0 ? (
+                      /* Fallback single payment row from bill */
+                      <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="font-extrabold text-slate-900 text-sm">{formatINR(totalPaid)}</span>
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-bold border uppercase tracking-wider bg-emerald-100 text-emerald-800 border-emerald-200">
+                            {paymentStatus}
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-400">{billDate ? formatDate(billDate) : ''}</span>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-slate-400 italic">
+                        {lang === 'gu' ? 'હજુ સુધી કોઈ ચૂકવણી નોંધાયેલ નથી.' : 'No payments recorded yet.'}
+                      </div>
+                    )}
+
+                    {/* Add Installment Form (when balance due > 0 and expense is linked) */}
+                    {isLinkedExpense && balanceDue > 0 && currentExpense?.approval_status !== 'voided' && currentExpense?.approval_status !== 'rejected' && (
+                      <form onSubmit={handleAddPayment} className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-3">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-black text-amber-950">
+                              {t('btn_add_payment') || 'Record Payment'} (Remaining: {formatINR(balanceDue)})
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setPaymentAmount(balanceDue.toString())}
+                              className="px-2.5 py-1 text-[11px] font-black rounded-lg bg-blue-600 hover:bg-blue-700 active:scale-95 text-white shadow-sm transition flex items-center gap-1"
+                              title={lang === 'gu' ? 'બાકી પૂરી રકમ આપોઆપ ભરો' : 'Auto-fill full remaining balance'}
+                            >
+                              <span>{lang === 'gu' ? 'ચૂકતે કરો (Full Pay)' : 'Full Pay'}</span>
+                            </button>
                           </div>
-                          <div className="text-xs text-slate-600 mt-0.5">
-                            {lang === 'gu'
-                              ? 'આ બિલ હજુ દૈનિક ખર્ચ ખાતાવહીમાં ઉમેરાયું નથી.'
-                              : 'This bill is not recorded in the daily expense ledger yet.'}
+                        </div>
+
+                        {paymentError && (
+                          <div className="text-xs text-red-600 font-semibold">{paymentError}</div>
+                        )}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                              {t('lbl_amount')} (₹) *
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              max={balanceDue}
+                              required
+                              placeholder="Amount (₹)"
+                              value={paymentAmount}
+                              onChange={(e) => setPaymentAmount(e.target.value)}
+                              className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                              {t('lbl_payment_method')} *
+                            </label>
+                            <select
+                              value={paymentMethod}
+                              onChange={(e) => setPaymentMethod(e.target.value)}
+                              className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                            >
+                              <option value="cash">{t('pm_cash') || 'Cash'}</option>
+                              <option value="upi">UPI (GPay / PhonePe / Paytm)</option>
+                              <option value="bank_transfer">{t('pm_bank_transfer') || 'Bank Transfer'}</option>
+                              <option value="card">{t('pm_card') || 'Card'}</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-500 mb-1">
+                              {lang === 'gu' ? 'ચૂકવણી તારીખ' : 'Payment Date'} *
+                            </label>
+                            <input
+                              type="date"
+                              required
+                              value={paymentDate}
+                              onChange={(e) => setPaymentDate(e.target.value)}
+                              className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                            />
                           </div>
                         </div>
 
                         <button
-                          type="button"
-                          onClick={handleCreateExpense}
-                          disabled={linkingExpense || linkSuccess}
-                          className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:bg-emerald-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition"
+                          type="submit"
+                          disabled={submittingPayment}
+                          className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition shadow-sm inline-flex items-center gap-1.5"
                         >
-                          {linkingExpense ? (
-                            <span>{lang === 'gu' ? 'ઉમેરાઈ રહ્યું છે...' : 'Recording...'}</span>
-                          ) : linkSuccess ? (
-                            <>
-                              <Check className="w-3.5 h-3.5" />
-                              <span>{lang === 'gu' ? 'ઉમેરાઈ ગયું!' : 'Recorded!'}</span>
-                            </>
-                          ) : (
-                            <>
-                              <Plus className="w-3.5 h-3.5" />
-                              <span>{lang === 'gu' ? 'દૈનિક ખર્ચમાં ઉમેરો' : 'Record to Daily Expenses'}</span>
-                            </>
-                          )}
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>{submittingPayment ? 'Recording...' : (t('btn_add_payment') || 'Record Payment')}</span>
                         </button>
-
-                        {linkError && (
-                          <div className="w-full text-xs text-rose-700 flex items-center gap-1 font-semibold">
-                            <AlertCircle className="w-3.5 h-3.5" />
-                            <span>{linkError}</span>
-                          </div>
-                        )}
-                      </div>
+                      </form>
                     )}
-
-                    {/* 7. Installment Payments & Payment History */}
-                    <div className="space-y-3 pt-1">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                          <CreditCard className="w-3.5 h-3.5 text-amber-600" />
-                          <span>{lang === 'gu' ? 'ચૂકવણી હિસ્ટ્રી' : 'Payment History'} ({currentExpense?.payments?.length || (totalPaid > 0 ? 1 : 0)})</span>
-                        </h4>
-                      </div>
-
-                      {paymentActionError && (
-                        <div className="p-2.5 bg-rose-50 text-rose-800 border border-rose-200 rounded-xl text-xs flex items-center gap-2 font-medium">
-                          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                          <span>{paymentActionError}</span>
-                        </div>
-                      )}
-
-                      {/* Payment rows */}
-                      {currentExpense?.payments && currentExpense.payments.length > 0 ? (
-                        <div className="space-y-2">
-                          {currentExpense.payments.map((p) => {
-                            const isItemEditing = editingPaymentId === p.id;
-                            if (isItemEditing) {
-                              return (
-                                <div key={p.id} className="p-3.5 rounded-xl bg-amber-50/90 border border-amber-300 space-y-3 animate-fade-in text-xs shadow-sm">
-                                  <div className="flex items-center justify-between font-bold text-amber-950 pb-1.5 border-b border-amber-200/70">
-                                    <span className="flex items-center gap-1.5">
-                                      <Edit className="w-3.5 h-3.5 text-amber-700" />
-                                      <span>{lang === 'gu' ? 'ચૂકવણી સુધારો' : 'Edit Payment Details'}</span>
-                                    </span>
-                                    <span className="text-[10px] text-slate-500 font-mono">ID: {p.id.slice(0, 10)}...</span>
-                                  </div>
-                                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                                    <div>
-                                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
-                                        {t('lbl_amount')} (₹) *
-                                      </label>
-                                      <input
-                                        type="number"
-                                        step="0.01"
-                                        min="0.01"
-                                        value={editPayAmount}
-                                        onChange={(e) => setEditPayAmount(e.target.value)}
-                                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                                        required
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
-                                        {lang === 'gu' ? 'ચૂકવણી પદ્ધતિ' : 'Payment Method'} *
-                                      </label>
-                                      <select
-                                        value={editPayMethod}
-                                        onChange={(e) => setEditPayMethod(e.target.value)}
-                                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                                      >
-                                        <option value="upi">UPI (GPay / PhonePe / Paytm)</option>
-                                        <option value="cash">{t('pm_cash') || 'Cash'}</option>
-                                        <option value="bank_transfer">{t('pm_bank_transfer') || 'Bank Transfer'}</option>
-                                        <option value="card">{t('pm_card') || 'Card'}</option>
-                                      </select>
-                                    </div>
-                                    <div>
-                                      <label className="block text-[10px] font-bold text-slate-700 mb-1">
-                                        {lang === 'gu' ? 'ચૂકવણી તારીખ' : 'Payment Date'} *
-                                      </label>
-                                      <input
-                                        type="date"
-                                        value={editPayDate}
-                                        onChange={(e) => setEditPayDate(e.target.value)}
-                                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                                        required
-                                      />
-                                    </div>
-                                  </div>
-                                  <div className="flex items-center justify-end gap-2 pt-1 border-t border-amber-200/50">
-                                    <button
-                                      type="button"
-                                      onClick={handleCancelEditPayment}
-                                      disabled={savingPaymentAction}
-                                      className="px-3 py-1 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold transition"
-                                    >
-                                      {lang === 'gu' ? 'રદ કરો' : 'Cancel'}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleSavePayment(p.id)}
-                                      disabled={savingPaymentAction}
-                                      className="px-3.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition shadow-sm flex items-center gap-1.5"
-                                    >
-                                      <Check className="w-3.5 h-3.5" />
-                                      <span>{savingPaymentAction ? 'Saving...' : (lang === 'gu' ? 'સાચવો' : 'Save')}</span>
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            }
-
-                            const methodBadgeColor = p.payment_method === 'upi'
-                              ? 'bg-blue-100 text-blue-800 border-blue-200'
-                              : p.payment_method === 'cash'
-                              ? 'bg-slate-100 text-slate-800 border-slate-200'
-                              : p.payment_method === 'bank_transfer'
-                              ? 'bg-purple-100 text-purple-800 border-purple-200'
-                              : 'bg-amber-100 text-amber-800 border-amber-200';
-
-                            return (
-                              <div key={p.id} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 text-xs hover:border-slate-300 transition">
-                                <div className="flex items-center gap-2.5">
-                                  <div className="flex flex-col">
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-extrabold text-slate-900 text-sm">{formatINR(p.amount)}</span>
-                                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border uppercase tracking-wider ${methodBadgeColor}`}>
-                                        {p.payment_method === 'upi' ? 'UPI' : p.payment_method}
-                                      </span>
-                                    </div>
-                                    {p.reference_number && (
-                                      <span className="text-[11px] text-slate-400 mt-0.5">Ref: {p.reference_number}</span>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-3">
-                                  <div className="text-right text-[11px] text-slate-500">
-                                    <div className="font-medium text-slate-700">{formatDate(p.payment_date)}</div>
-                                    <div className="text-[10px] text-slate-400">By: {p.recorded_by_name}</div>
-                                  </div>
-                                  {isOwnerOrManager && currentExpense.approval_status !== 'voided' && (
-                                    <div className="flex items-center gap-1 pl-2 border-l border-slate-200">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleStartEditPayment(p)}
-                                        className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition"
-                                        title={lang === 'gu' ? 'ચૂકવણી સુધારો' : 'Edit Payment'}
-                                      >
-                                        <Edit className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeletePayment(p.id, p.amount, p.payment_method)}
-                                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
-                                        title={lang === 'gu' ? 'ચૂકવણી રદ કરો' : 'Delete Payment'}
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : totalPaid > 0 ? (
-                        /* Fallback single payment row from bill */
-                        <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-200/70 text-xs">
-                          <div className="flex items-center gap-2">
-                            <span className="font-extrabold text-slate-900 text-sm">{formatINR(totalPaid)}</span>
-                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold border uppercase tracking-wider bg-emerald-100 text-emerald-800 border-emerald-200">
-                              {paymentStatus}
-                            </span>
-                          </div>
-                          <span className="text-[11px] text-slate-400">{billDate ? formatDate(billDate) : ''}</span>
-                        </div>
-                      ) : (
-                        <div className="text-xs text-slate-400 italic">
-                          {lang === 'gu' ? 'હજુ સુધી કોઈ ચૂકવણી નોંધાયેલ નથી.' : 'No payments recorded yet.'}
-                        </div>
-                      )}
-
-                      {/* Add Installment Form (when balance due > 0 and expense is linked) */}
-                      {isLinkedExpense && balanceDue > 0 && currentExpense?.approval_status !== 'voided' && currentExpense?.approval_status !== 'rejected' && (
-                        <form onSubmit={handleAddPayment} className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-3">
-                          <div className="flex items-center justify-between gap-2 flex-wrap">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-black text-amber-950">
-                                {t('btn_add_payment') || 'Record Payment'} (Remaining: {formatINR(balanceDue)})
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => setPaymentAmount(balanceDue.toString())}
-                                className="px-2.5 py-1 text-[11px] font-black rounded-lg bg-blue-600 hover:bg-blue-700 active:scale-95 text-white shadow-sm transition flex items-center gap-1"
-                                title={lang === 'gu' ? 'બાકી પૂરી રકમ આપોઆપ ભરો' : 'Auto-fill full remaining balance'}
-                              >
-                                <span>{lang === 'gu' ? 'ચૂકતે કરો (Full Pay)' : 'Full Pay'}</span>
-                              </button>
-                            </div>
-                          </div>
-
-                          {paymentError && (
-                            <div className="text-xs text-red-600 font-semibold">{paymentError}</div>
-                          )}
-
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                            <div>
-                              <label className="block text-[10px] font-bold text-slate-500 mb-1">
-                                {t('lbl_amount')} (₹) *
-                              </label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                max={balanceDue}
-                                required
-                                placeholder="Amount (₹)"
-                                value={paymentAmount}
-                                onChange={(e) => setPaymentAmount(e.target.value)}
-                                className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-[10px] font-bold text-slate-500 mb-1">
-                                {t('lbl_payment_method')} *
-                              </label>
-                              <select
-                                value={paymentMethod}
-                                onChange={(e) => setPaymentMethod(e.target.value)}
-                                className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-200"
-                              >
-                                <option value="cash">{t('pm_cash') || 'Cash'}</option>
-                                <option value="upi">UPI (GPay / PhonePe / Paytm)</option>
-                                <option value="bank_transfer">{t('pm_bank_transfer') || 'Bank Transfer'}</option>
-                                <option value="card">{t('pm_card') || 'Card'}</option>
-                              </select>
-                            </div>
-                            <div>
-                              <label className="block text-[10px] font-bold text-slate-500 mb-1">
-                                {lang === 'gu' ? 'ચૂકવણી તારીખ' : 'Payment Date'} *
-                              </label>
-                              <input
-                                type="date"
-                                required
-                                value={paymentDate}
-                                onChange={(e) => setPaymentDate(e.target.value)}
-                                className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-200"
-                              />
-                            </div>
-                          </div>
-
-                          <button
-                            type="submit"
-                            disabled={submittingPayment}
-                            className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition shadow-sm inline-flex items-center gap-1.5"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            <span>{submittingPayment ? 'Recording...' : (t('btn_add_payment') || 'Record Payment')}</span>
-                          </button>
-                        </form>
-                      )}
-                    </div>
-                  </>
+                  </div>
                 )}
               </div>
             </div>
@@ -1765,13 +1900,35 @@ export function ExpenseDetailsModal({
               )}
             </div>
 
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-sm"
-            >
-              {t('btn_cancel') || 'Close'}
-            </button>
+            {isEditing ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCancelEditing}
+                  disabled={savingEdit}
+                  className="px-4 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-xl transition"
+                >
+                  {t('btn_cancel_edit') || 'Cancel'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveEdit}
+                  disabled={savingEdit}
+                  className="px-5 py-2 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-xl transition inline-flex items-center gap-1.5 shadow-md shadow-amber-600/20"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>{savingEdit ? (lang === 'gu' ? 'સાચવી રહ્યું છે...' : 'Saving...') : (t('btn_save_changes') || 'Save Changes')}</span>
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-sm"
+              >
+                {t('btn_cancel') || 'Close'}
+              </button>
+            )}
           </div>
         </div>
       </div>

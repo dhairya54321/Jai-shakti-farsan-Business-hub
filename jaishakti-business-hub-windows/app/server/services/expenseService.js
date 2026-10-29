@@ -1440,24 +1440,44 @@ export const ExpenseService = {
 
       // Keep linked vendor bill in sync if present or create if vendor attached
       const billPaidAmount = paymentStatus === 'paid' ? amount : (paymentStatus === 'partially_paid' ? totalPaid : 0);
-      const linkedBill = db.prepare('SELECT id FROM vendor_bills WHERE expense_id = ?').get(expenseId);
+      const billSubtotal = data.subtotal !== undefined ? parseAndValidateAmount(data.subtotal) : amount;
+      const billDueDate = data.due_date !== undefined ? (data.due_date || null) : null;
+      let billOcrRawText = null;
+      if (data.ocr_raw_text) {
+        billOcrRawText = typeof data.ocr_raw_text === 'string' ? data.ocr_raw_text : JSON.stringify(data.ocr_raw_text, null, 2);
+      } else if (Array.isArray(data.items)) {
+        billOcrRawText = JSON.stringify({
+          invoiceNumber: invoiceNumber || null,
+          invoiceDate: transactionDate,
+          dueDate: billDueDate,
+          subtotal: billSubtotal,
+          totalAmount: amount,
+          items: data.items
+        }, null, 2);
+      }
+
+      const linkedBill = db.prepare('SELECT id, ocr_raw_text FROM vendor_bills WHERE expense_id = ?').get(expenseId);
       if (linkedBill) {
         if (vendorId) {
           db.prepare(`
             UPDATE vendor_bills SET
-              vendor_id = ?, bill_number = ?, bill_date = ?, subtotal = ?, taxable_amount = ?,
-              total_amount = ?, payment_status = ?, paid_amount = ?, notes = ?, updated_at = ?
+              vendor_id = ?, bill_number = ?, bill_date = ?, due_date = COALESCE(?, due_date),
+              subtotal = ?, taxable_amount = ?,
+              total_amount = ?, payment_status = ?, paid_amount = ?, notes = ?,
+              ocr_raw_text = COALESCE(?, ocr_raw_text), updated_at = ?
             WHERE id = ?
           `).run(
             vendorId,
             invoiceNumber || null,
             transactionDate,
-            amount,
-            amount,
+            billDueDate,
+            billSubtotal,
+            billSubtotal,
             amount,
             paymentStatus,
             billPaidAmount,
             description || notes || null,
+            billOcrRawText,
             now,
             linkedBill.id
           );
@@ -1467,25 +1487,29 @@ export const ExpenseService = {
         }
       } else if (vendorId) {
         const matchedBill = invoiceNumber ? db.prepare(`
-          SELECT id FROM vendor_bills 
+          SELECT id, ocr_raw_text FROM vendor_bills 
           WHERE vendor_id = ? AND UPPER(TRIM(COALESCE(bill_number, ''))) = UPPER(TRIM(?))
         `).get(vendorId, invoiceNumber) : null;
 
         if (matchedBill) {
           db.prepare(`
             UPDATE vendor_bills SET
-              expense_id = ?, bill_date = ?, subtotal = ?, taxable_amount = ?,
-              total_amount = ?, payment_status = ?, paid_amount = ?, notes = ?, updated_at = ?
+              expense_id = ?, bill_date = ?, due_date = COALESCE(?, due_date),
+              subtotal = ?, taxable_amount = ?,
+              total_amount = ?, payment_status = ?, paid_amount = ?, notes = ?,
+              ocr_raw_text = COALESCE(?, ocr_raw_text), updated_at = ?
             WHERE id = ?
           `).run(
             expenseId,
             transactionDate,
-            amount,
-            amount,
+            billDueDate,
+            billSubtotal,
+            billSubtotal,
             amount,
             paymentStatus,
             billPaidAmount,
             description || notes || null,
+            billOcrRawText,
             now,
             matchedBill.id
           );
@@ -1493,10 +1517,10 @@ export const ExpenseService = {
           const newBillId = 'bill_' + crypto.randomUUID();
           db.prepare(`
             INSERT INTO vendor_bills (
-              id, business_id, vendor_id, expense_id, bill_number, bill_date,
+              id, business_id, vendor_id, expense_id, bill_number, bill_date, due_date,
               subtotal, taxable_amount, total_amount, payment_status, paid_amount,
-              notes, ocr_status, created_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              notes, ocr_status, ocr_raw_text, created_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             newBillId,
             businessId,
@@ -1504,13 +1528,15 @@ export const ExpenseService = {
             expenseId,
             invoiceNumber || null,
             transactionDate,
-            amount,
-            amount,
+            billDueDate,
+            billSubtotal,
+            billSubtotal,
             amount,
             paymentStatus,
             billPaidAmount,
             description || notes || null,
-            'manual',
+            billOcrRawText ? 'completed' : 'manual',
+            billOcrRawText || null,
             user.id,
             now,
             now
