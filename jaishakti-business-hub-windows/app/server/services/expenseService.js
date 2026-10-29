@@ -1664,11 +1664,13 @@ export const ExpenseService = {
         e.transaction_number LIKE ? OR
         e.description LIKE ? OR
         e.invoice_number LIKE ? OR
+        e.notes LIKE ? OR
         v.name LIKE ? OR
+        v.phone LIKE ? OR
         w.name LIKE ?
       )`);
       const searchParam = `%${filters.search}%`;
-      params.push(searchParam, searchParam, searchParam, searchParam, searchParam);
+      params.push(searchParam, searchParam, searchParam, searchParam, searchParam, searchParam, searchParam);
     }
 
     if (filters.category_id) {
