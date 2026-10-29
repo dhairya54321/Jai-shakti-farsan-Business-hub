@@ -34,6 +34,7 @@ export const AVAILABLE_COLUMNS = [
   { id: 'tx_no', key: 'col_tx_no', default: true },
   { id: 'category', key: 'col_category', default: true },
   { id: 'description', key: 'col_description', default: true },
+  { id: 'purchased_items', key: 'col_purchased_items', default: true },
   { id: 'vendor', key: 'col_vendor', default: true },
   { id: 'amount', key: 'col_amount', default: true },
   { id: 'paid', key: 'col_paid', default: true },
@@ -47,12 +48,62 @@ export const AVAILABLE_COLUMNS = [
 ];
 
 export const PRESETS = {
-  standard: ['date', 'tx_no', 'category', 'description', 'vendor', 'amount', 'paid', 'payment_status', 'actions'],
+  standard: ['date', 'tx_no', 'category', 'description', 'purchased_items', 'vendor', 'amount', 'paid', 'payment_status', 'actions'],
   compact: ['date', 'category', 'vendor', 'amount', 'payment_status', 'actions'],
   full: AVAILABLE_COLUMNS.map(c => c.id)
 };
 
-const COLUMN_STORAGE_KEY = 'jaishakti_tx_visible_columns_v2';
+const COLUMN_STORAGE_KEY = 'jaishakti_tx_visible_columns_v3';
+
+export function extractPurchasedItems(tx) {
+  if (!tx) return [];
+  let items = [];
+
+  // 1. Structured line items from bill_ocr_raw_text
+  if (tx.bill_ocr_raw_text) {
+    try {
+      const parsed = typeof tx.bill_ocr_raw_text === 'string'
+        ? JSON.parse(tx.bill_ocr_raw_text)
+        : tx.bill_ocr_raw_text;
+      if (parsed && Array.isArray(parsed.items)) {
+        items = parsed.items
+          .filter(it => it && (it.description || it.name))
+          .map(it => {
+            const name = (it.description || it.name || '').trim();
+            const qtyStr = it.quantity != null && it.quantity !== '' ? String(it.quantity) : '';
+            const unitStr = it.unit ? String(it.unit).trim() : '';
+            const qty = (qtyStr + (unitStr ? ' ' + unitStr : '')).trim();
+            return { name, qty };
+          });
+      }
+    } catch (e) {}
+  }
+
+  // 2. Fallback to notes parsing if no structured line items found
+  if (items.length === 0 && tx.notes) {
+    const rawLines = tx.notes.split(/[;\n\r]+/);
+    for (const line of rawLines) {
+      const clean = line.replace(/^[•\s*-]+/, '').trim();
+      const m = clean.match(/^([^:@]+?)\s*:\s*(\d+(?:\.\d+)?\s*[a-zA-Z\u0A80-\u0AFF]+)/);
+      if (m) {
+        items.push({ name: m[1].trim(), qty: m[2].trim() });
+      }
+    }
+  }
+
+  // Deduplicate identical items
+  const seen = new Set();
+  const deduped = [];
+  for (const it of items) {
+    if (!it.name) continue;
+    const key = (it.name + '||' + (it.qty || '')).toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(it);
+    }
+  }
+  return deduped;
+}
 
 const getInitialVisibleColumns = () => {
   try {
@@ -62,6 +113,23 @@ const getInitialVisibleColumns = () => {
       if (Array.isArray(parsed) && parsed.length > 0) {
         if (!parsed.includes('actions')) parsed.push('actions');
         return parsed;
+      }
+    }
+    // Backward compatibility: upgrade existing v2 selections cleanly
+    const savedV2 = localStorage.getItem('jaishakti_tx_visible_columns_v2');
+    if (savedV2) {
+      const parsedV2 = JSON.parse(savedV2);
+      if (Array.isArray(parsedV2) && parsedV2.length > 0) {
+        if (!parsedV2.includes('purchased_items')) {
+          const descIdx = parsedV2.indexOf('description');
+          if (descIdx !== -1) {
+            parsedV2.splice(descIdx + 1, 0, 'purchased_items');
+          } else {
+            parsedV2.push('purchased_items');
+          }
+        }
+        if (!parsedV2.includes('actions')) parsedV2.push('actions');
+        return parsedV2;
       }
     }
   } catch (e) {}
@@ -650,6 +718,7 @@ export function Transactions({ onNavigate }) {
                   {isColVisible('tx_no') && <th className="px-4 py-3 whitespace-nowrap">{t('col_tx_no')}</th>}
                   {isColVisible('category') && <th className="px-4 py-3 whitespace-nowrap">{t('col_category')}</th>}
                   {isColVisible('description') && <th className="px-4 py-3 min-w-[160px]">{t('col_description')}</th>}
+                  {isColVisible('purchased_items') && <th className="px-4 py-3 min-w-[200px] whitespace-nowrap">{t('col_purchased_items')}</th>}
                   {isColVisible('vendor') && <th className="px-4 py-3 whitespace-nowrap">{t('col_vendor')}</th>}
                   {isColVisible('amount') && <th className="px-4 py-3 whitespace-nowrap">{t('col_amount')}</th>}
                   {isColVisible('paid') && <th className="px-4 py-3 whitespace-nowrap">{t('col_paid')}</th>}
@@ -685,6 +754,35 @@ export function Transactions({ onNavigate }) {
                       {isColVisible('description') && (
                         <td className="px-4 py-3 max-w-[220px] truncate text-slate-600" title={tx.description || ''}>
                           {tx.description || '—'}
+                        </td>
+                      )}
+                      {isColVisible('purchased_items') && (
+                        <td className="px-4 py-3 min-w-[180px] max-w-[280px]">
+                          {(() => {
+                            const items = extractPurchasedItems(tx);
+                            if (!items || items.length === 0) {
+                              return <span className="text-slate-300 font-mono">—</span>;
+                            }
+                            return (
+                              <div className="flex flex-col gap-1.5 py-0.5">
+                                {items.map((it, idx) => (
+                                  <div
+                                    key={idx}
+                                    className="flex items-center justify-between gap-2 bg-slate-50 px-2 py-1 rounded-md border border-slate-200/80 text-xs shadow-2xs"
+                                  >
+                                    <span className="font-semibold text-slate-800 truncate" title={it.name}>
+                                      {it.name}
+                                    </span>
+                                    {it.qty && (
+                                      <span className="shrink-0 px-1.5 py-0.5 bg-amber-100 text-amber-900 border border-amber-300 rounded text-[11px] font-bold font-mono">
+                                        {it.qty}
+                                      </span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
                         </td>
                       )}
                       {isColVisible('vendor') && (

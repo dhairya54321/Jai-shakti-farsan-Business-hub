@@ -1782,7 +1782,8 @@ export const ExpenseService = {
              v.name as vendor_name,
              w.name as worker_name, w.phone as worker_phone,
              u.full_name as creator_name,
-             (SELECT COALESCE(SUM(amount), 0) FROM expense_payments WHERE expense_id = e.id) as total_paid
+             (SELECT COALESCE(SUM(amount), 0) FROM expense_payments WHERE expense_id = e.id) as total_paid,
+             (SELECT ocr_raw_text FROM vendor_bills WHERE expense_id = e.id LIMIT 1) as bill_ocr_raw_text
       FROM expenses e
       LEFT JOIN expense_categories c ON c.id = e.category_id
       LEFT JOIN vendors v ON v.id = e.vendor_id
