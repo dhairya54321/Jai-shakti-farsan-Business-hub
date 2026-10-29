@@ -1630,6 +1630,106 @@ export function runMigrations(dbInstance = null) {
     console.log('Migration 014_sync_bill_payment_statuses already applied.');
   }
 
+  // Migration 015: Ensure all vendor bills have structured OCR items in ocr_raw_text
+  if (!appliedMigrations.includes('015_backfill_vendor_bills_items_json')) {
+    console.log('Applying migration: 015_backfill_vendor_bills_items_json...');
+    (() => {
+      const now = new Date().toISOString();
+      const bills = db.prepare(`
+        SELECT b.*, e.description as exp_desc, e.notes as exp_notes 
+        FROM vendor_bills b 
+        LEFT JOIN expenses e ON e.id = b.expense_id
+      `).all();
+
+      function parseItems(text, fallbackAmount, fallbackDesc) {
+        if (!text) return [];
+        const lines = text.split(/[\r\n;]+/).map(l => l.trim()).filter(Boolean);
+        const items = [];
+        for (const line of lines) {
+          if (/^(purchase of|purchased|total amount|payment|terms|buyer|seller)/i.test(line)) continue;
+          let match = line.match(/^[-•*]?\s*(?:(\d+)\s*[\.\)]\s*)?([^:@]+?):\s*([0-9.]+)\s*([A-Za-z\s]+)?(?:\([^)]*\))?\s*[@|at]\s*(?:Rate)?\s*[₹Rs.]*\s*([0-9,.]+)\s*(?:per\s*[A-Za-z]+|\/[A-Za-z]+)?\s*(?:=|Amount:|\(Amount:)?\s*[₹Rs.]*\s*([0-9,.]+)?/i);
+          if (match) {
+            const desc = match[2].trim();
+            const qty = parseFloat(match[3]) || 1;
+            const unit = (match[4] || '').trim().replace(/^(each|per)\s*/i, '');
+            const rate = parseFloat((match[5] || '').replace(/,/g, '')) || 0;
+            const amt = match[6] ? parseFloat(match[6].replace(/,/g, '')) : Math.round(qty * rate * 100) / 100;
+            if (desc && (rate > 0 || amt > 0)) {
+              items.push({ description: desc, quantity: qty, unit, rate, amount: amt });
+              continue;
+            }
+          }
+          match = line.match(/^[-•*]?\s*(?:(\d+)\s*[\.\)]\s*)?([0-9.]+)\s*([A-Za-z\s]+)\s+(?:of\s+)?([^:@]+?)\s*[@|at]\s*(?:Rate)?\s*[₹Rs.]*\s*([0-9,.]+)\s*(?:per\s*[A-Za-z]+|\/[A-Za-z]+)?\s*(?:=|Amount:|\(Amount:)?\s*(?:each)?\s*[₹Rs.]*\s*([0-9,.]+)?/i);
+          if (match) {
+            const qty = parseFloat(match[2]) || 1;
+            const unit = (match[3] || '').trim();
+            const desc = match[4].trim();
+            const rate = parseFloat((match[5] || '').replace(/,/g, '')) || 0;
+            const amt = match[6] ? parseFloat(match[6].replace(/,/g, '')) : Math.round(qty * rate * 100) / 100;
+            if (desc && (rate > 0 || amt > 0)) {
+              items.push({ description: desc, quantity: qty, unit, rate, amount: amt });
+              continue;
+            }
+          }
+          match = line.match(/^[-•*]?\s*([^:@]+?):\s*(?:Qty\s*)?([0-9.]+)\s*([A-Za-z\s]+)?,\s*(?:Amount\s*)?[₹Rs.]*\s*([0-9,.]+)/i);
+          if (match) {
+            const desc = match[1].trim();
+            const qty = parseFloat(match[2]) || 1;
+            const unit = (match[3] || '').trim();
+            const amt = parseFloat(match[4].replace(/,/g, '')) || 0;
+            const rate = qty > 0 ? Math.round((amt / qty) * 100) / 100 : amt;
+            if (desc && amt > 0) {
+              items.push({ description: desc, quantity: qty, unit, rate, amount: amt });
+              continue;
+            }
+          }
+        }
+        if (items.length === 0 && fallbackAmount > 0) {
+          const cleanDesc = (fallbackDesc || lines[0] || '').replace(/^[-•*]\s*/, '').replace(/\s*-\s*[A-Za-z\s&]+$/, '').trim();
+          if (cleanDesc && !/^(bill|invoice|voucher)/i.test(cleanDesc)) {
+            items.push({ description: cleanDesc, quantity: 1, unit: '', rate: fallbackAmount, amount: fallbackAmount });
+          }
+        }
+        return items;
+      }
+
+      for (const b of bills) {
+        let hasItems = false;
+        if (b.ocr_raw_text) {
+          try {
+            const p = JSON.parse(b.ocr_raw_text);
+            if (Array.isArray(p.items) && p.items.length > 0) hasItems = true;
+          } catch (e) {}
+        }
+        if (!hasItems) {
+          const textToSearch = (b.exp_notes || '') + '\n' + (b.notes || '') + '\n' + (b.exp_desc || '');
+          const items = parseItems(textToSearch, b.total_amount, b.exp_desc || b.notes);
+          if (items.length > 0) {
+            const ocrPayload = {
+              invoiceNumber: b.bill_number,
+              invoiceDate: b.bill_date,
+              subtotal: b.subtotal,
+              totalAmount: b.total_amount,
+              items: items
+            };
+            db.prepare('UPDATE vendor_bills SET ocr_raw_text = ? WHERE id = ?').run(
+              JSON.stringify(ocrPayload, null, 2),
+              b.id
+            );
+          }
+        }
+      }
+
+      db.prepare('INSERT INTO migrations (name, executed_at) VALUES (?, ?)').run(
+        '015_backfill_vendor_bills_items_json',
+        now
+      );
+    })();
+    console.log('Migration 015_backfill_vendor_bills_items_json applied successfully.');
+  } else {
+    console.log('Migration 015_backfill_vendor_bills_items_json already applied.');
+  }
+
   return true;
 }
 

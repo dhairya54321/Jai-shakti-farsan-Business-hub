@@ -34,6 +34,113 @@ import {
   AlertTriangle
 } from 'lucide-react';
 
+// Helper to guarantee line items extraction from ocr_raw_text, notes, or descriptions
+function extractItems(currentExpense, currentBill, subtotal, grandTotal) {
+  // 1. Try to read from ocr_raw_text
+  const rawOcr = currentExpense?.ocr_raw_text || currentBill?.ocr_raw_text;
+  if (rawOcr) {
+    try {
+      const parsed = typeof rawOcr === 'string' ? JSON.parse(rawOcr) : rawOcr;
+      if (Array.isArray(parsed?.items) && parsed.items.length > 0) {
+        return parsed.items.map((it) => ({
+          description: it.description || 'Item',
+          quantity: it.quantity != null ? it.quantity : 1,
+          unit: it.unit || '',
+          rate: it.rate != null ? Number(it.rate) : null,
+          amount: it.amount != null ? Number(it.amount) : null
+        }));
+      }
+    } catch (e) {}
+  }
+
+  // 2. Parse from notes, description, or summary
+  const textSources = [
+    currentExpense?.notes,
+    currentBill?.notes,
+    currentExpense?.description,
+    currentBill?.description
+  ].filter(Boolean).join('\n');
+
+  if (textSources) {
+    const lines = textSources.split(/[\r\n;]+/).map((l) => l.trim()).filter(Boolean);
+    const parsedFromText = [];
+
+    for (const line of lines) {
+      if (/^(purchase of|purchased|total amount|payment|terms|buyer|seller)/i.test(line)) continue;
+
+      // Pattern 1: Description: Qty [unit] [(extra)] @ [Rate] [= Amount]
+      // e.g. '• COT RANI OIL 15 KG NEW TIN: 10 TIN @ ₹2,704.82 = ₹27,048.16'
+      // e.g. '• POTATO: 100 KG (2 Bags) @ ₹20.25 = ₹2,025'
+      let match = line.match(/^[-•*]?\s*(?:(\d+)\s*[\.\)]\s*)?([^:@]+?):\s*([0-9.]+)\s*([A-Za-z\s]+)?(?:\([^)]*\))?\s*[@|at]\s*(?:Rate)?\s*[₹Rs.]*\s*([0-9,.]+)\s*(?:per\s*[A-Za-z]+|\/[A-Za-z]+)?\s*(?:=|Amount:|\(Amount:)?\s*[₹Rs.]*\s*([0-9,.]+)?/i);
+      if (match) {
+        const desc = match[2].trim();
+        const qty = parseFloat(match[3]) || 1;
+        const unit = (match[4] || '').trim().replace(/^(each|per)\s*/i, '');
+        const rate = parseFloat((match[5] || '').replace(/,/g, '')) || 0;
+        const amt = match[6] ? parseFloat(match[6].replace(/,/g, '')) : Math.round(qty * rate * 100) / 100;
+        if (desc && (rate > 0 || amt > 0)) {
+          parsedFromText.push({ description: desc, quantity: qty, unit, rate, amount: amt });
+          continue;
+        }
+      }
+
+      // Pattern 2: [Qty] [unit] [of] [Description] @ [Rate] [= Amount]
+      // e.g. '10 Tin of C.S.OIL15KTIN - RANI @ 2542.86 per Tin = 25428.5'
+      match = line.match(/^[-•*]?\s*(?:(\d+)\s*[\.\)]\s*)?([0-9.]+)\s*([A-Za-z\s]+)\s+(?:of\s+)?([^:@]+?)\s*[@|at]\s*(?:Rate)?\s*[₹Rs.]*\s*([0-9,.]+)\s*(?:per\s*[A-Za-z]+|\/[A-Za-z]+)?\s*(?:=|Amount:|\(Amount:)?\s*(?:each)?\s*[₹Rs.]*\s*([0-9,.]+)?/i);
+      if (match) {
+        const qty = parseFloat(match[2]) || 1;
+        const unit = (match[3] || '').trim();
+        const desc = match[4].trim();
+        const rate = parseFloat((match[5] || '').replace(/,/g, '')) || 0;
+        const amt = match[6] ? parseFloat(match[6].replace(/,/g, '')) : Math.round(qty * rate * 100) / 100;
+        if (desc && (rate > 0 || amt > 0)) {
+          parsedFromText.push({ description: desc, quantity: qty, unit, rate, amount: amt });
+          continue;
+        }
+      }
+
+      // Pattern 3: Description: Qty [N] [unit], Amount [N]
+      match = line.match(/^[-•*]?\s*([^:@]+?):\s*(?:Qty\s*)?([0-9.]+)\s*([A-Za-z\s]+)?,\s*(?:Amount\s*)?[₹Rs.]*\s*([0-9,.]+)/i);
+      if (match) {
+        const desc = match[1].trim();
+        const qty = parseFloat(match[2]) || 1;
+        const unit = (match[3] || '').trim();
+        const amt = parseFloat(match[4].replace(/,/g, '')) || 0;
+        const rate = qty > 0 ? Math.round((amt / qty) * 100) / 100 : amt;
+        if (desc && amt > 0) {
+          parsedFromText.push({ description: desc, quantity: qty, unit, rate, amount: amt });
+          continue;
+        }
+      }
+    }
+
+    if (parsedFromText.length > 0) {
+      return parsedFromText;
+    }
+  }
+
+  // 3. Fallback: Guaranteed item display so that every invoice detail has the items table!
+  const fallbackDesc =
+    currentExpense?.description ||
+    currentBill?.notes?.split('\n')[0]?.replace(/^[-•*]\s*/, '').trim() ||
+    currentExpense?.notes?.split('\n')[0]?.replace(/^[-•*]\s*/, '').trim() ||
+    currentExpense?.category_name_gu ||
+    currentExpense?.category_name_en ||
+    'Purchase Items / સામગ્રી ખરીદી';
+
+  const effectiveAmt = subtotal > 0 ? subtotal : (grandTotal > 0 ? grandTotal : 0);
+
+  return [
+    {
+      description: fallbackDesc,
+      quantity: 1,
+      unit: '',
+      rate: effectiveAmt,
+      amount: effectiveAmt
+    }
+  ];
+}
+
 export function ExpenseDetailsModal({
   expense,
   bill,
@@ -261,17 +368,8 @@ export function ExpenseDetailsModal({
   const isImage = activeAttachment?.content_type ? activeAttachment.content_type.startsWith('image/') : true;
   const isPdf = activeAttachment?.content_type === 'application/pdf';
 
-  // Decoded line items from OCR
-  let parsedItems = [];
-  try {
-    const rawOcr = currentExpense?.ocr_raw_text || currentBill?.ocr_raw_text;
-    if (rawOcr) {
-      const parsed = typeof rawOcr === 'string' ? JSON.parse(rawOcr) : rawOcr;
-      if (Array.isArray(parsed?.items) && parsed.items.length > 0) {
-        parsedItems = parsed.items;
-      }
-    }
-  } catch (e) {}
+  // Line items (guaranteed to always return items for every invoice detail)
+  const parsedItems = extractItems(currentExpense, currentBill, subtotal, grandTotal);
 
   // Trigger parent updates
   const notifyParentUpdate = () => {
@@ -1227,51 +1325,49 @@ export function ExpenseDetailsModal({
                       </div>
                     </div>
 
-                    {/* 3. Decoded Line Items Table (if OCR extracted items) */}
-                    {parsedItems.length > 0 && (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                            <Tag className="w-3.5 h-3.5 text-amber-600" />
-                            <span>{lang === 'gu' ? 'બિલની આઇટમો અને જથ્થો' : 'Purchased Items & Quantities'}</span>
-                          </h4>
-                          <span className="text-[11px] font-bold text-slate-400">
-                            {parsedItems.length} {lang === 'gu' ? 'વસ્તુઓ' : 'items'}
-                          </span>
-                        </div>
-
-                        <div className="overflow-x-auto rounded-xl border border-slate-200">
-                          <table className="w-full text-left text-xs">
-                            <thead className="bg-slate-50 border-b border-slate-200 font-semibold text-slate-600">
-                              <tr>
-                                <th className="px-3 py-2">{lang === 'gu' ? 'વિગત' : 'Item Description'}</th>
-                                <th className="px-3 py-2 text-right">{lang === 'gu' ? 'જથ્થો' : 'Qty'}</th>
-                                <th className="px-3 py-2 text-right">{lang === 'gu' ? 'ભાવ (₹)' : 'Rate (₹)'}</th>
-                                <th className="px-3 py-2 text-right">{lang === 'gu' ? 'કુલ (₹)' : 'Amount (₹)'}</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100 bg-white">
-                              {parsedItems.map((item, idx) => (
-                                <tr key={idx} className="hover:bg-slate-50/70">
-                                  <td className="px-3 py-2 font-medium text-slate-900">
-                                    {item.description}
-                                  </td>
-                                  <td className="px-3 py-2 text-right text-slate-600 font-mono">
-                                    {item.quantity != null ? `${item.quantity} ${item.unit || ''}`.trim() : '1'}
-                                  </td>
-                                  <td className="px-3 py-2 text-right text-slate-600 font-mono">
-                                    {item.rate != null ? formatINR(item.rate) : '—'}
-                                  </td>
-                                  <td className="px-3 py-2 text-right font-black text-slate-900 font-mono">
-                                    {item.amount != null ? formatINR(item.amount) : '—'}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                    {/* 3. Decoded Line Items Table (Always visible in every invoice detail) */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                          <Tag className="w-3.5 h-3.5 text-amber-600" />
+                          <span>{lang === 'gu' ? 'બિલની આઇટમો અને જથ્થો' : 'Purchased Items & Quantities'}</span>
+                        </h4>
+                        <span className="text-[11px] font-bold text-slate-400">
+                          {parsedItems.length} {lang === 'gu' ? 'વસ્તુઓ' : 'items'}
+                        </span>
                       </div>
-                    )}
+
+                      <div className="overflow-x-auto rounded-xl border border-slate-200">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-50 border-b border-slate-200 font-semibold text-slate-600">
+                            <tr>
+                              <th className="px-3 py-2">{lang === 'gu' ? 'વિગત' : 'Item Description'}</th>
+                              <th className="px-3 py-2 text-right">{lang === 'gu' ? 'જથ્થો' : 'Qty'}</th>
+                              <th className="px-3 py-2 text-right">{lang === 'gu' ? 'ભાવ (₹)' : 'Rate (₹)'}</th>
+                              <th className="px-3 py-2 text-right">{lang === 'gu' ? 'કુલ (₹)' : 'Amount (₹)'}</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            {parsedItems.map((item, idx) => (
+                              <tr key={idx} className="hover:bg-slate-50/70">
+                                <td className="px-3 py-2 font-medium text-slate-900">
+                                  {item.description}
+                                </td>
+                                <td className="px-3 py-2 text-right text-slate-600 font-mono">
+                                  {item.quantity != null ? `${item.quantity} ${item.unit || ''}`.trim() : '1'}
+                                </td>
+                                <td className="px-3 py-2 text-right text-slate-600 font-mono">
+                                  {item.rate != null ? formatINR(item.rate) : '—'}
+                                </td>
+                                <td className="px-3 py-2 text-right font-black text-slate-900 font-mono">
+                                  {item.amount != null ? formatINR(item.amount) : '—'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
 
                     {/* 4. Notes / Item Summary (if notes or description exist) */}
                     {(activeRecord.notes || activeRecord.description) && (
