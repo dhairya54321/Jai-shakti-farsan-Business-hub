@@ -340,6 +340,28 @@ router.post('/bills', uploadAttachment.single('bill'), (req, res) => {
     }
 
     // 2-WAY: Save Vendor Bill & update vendor history
+    let finalOcrRawText = ocr_raw_text;
+    let finalSubtotal = subtotal;
+    if (inwardItems && inwardItems.length > 0) {
+      try {
+        let base = finalOcrRawText ? JSON.parse(finalOcrRawText) : {};
+        base.items = inwardItems.map(it => ({
+          description: it.notes || it.detected_desc || it.material_name || 'Item',
+          quantity: parseFloat(it.quantity) || 1,
+          unit: it.unit || 'kg',
+          rate: it.rate !== '' && it.rate !== null && it.rate !== undefined ? parseFloat(it.rate) : null,
+          amount: it.amount !== '' && it.amount !== null && it.amount !== undefined ? parseFloat(it.amount) : null
+        }));
+        base.totalAmount = Number(total_amount);
+        if (!finalSubtotal) {
+          const sum = base.items.reduce((s, it) => s + (Number(it.amount) || (Number(it.rate) * Number(it.quantity)) || 0), 0);
+          finalSubtotal = sum > 0 ? sum : Number(total_amount);
+        }
+        base.subtotal = Number(finalSubtotal);
+        finalOcrRawText = JSON.stringify(base, null, 2);
+      } catch (_) {}
+    }
+
     const bill = VendorService.saveBill(
       req.user,
       {
@@ -349,8 +371,8 @@ router.post('/bills', uploadAttachment.single('bill'), (req, res) => {
         bill_date,
         due_date,
         po_number,
-        subtotal,
-        taxable_amount,
+        subtotal: finalSubtotal,
+        taxable_amount: taxable_amount || finalSubtotal,
         cgst,
         sgst,
         igst,
@@ -360,7 +382,7 @@ router.post('/bills', uploadAttachment.single('bill'), (req, res) => {
         paid_amount,
         notes,
         ocr_status,
-        ocr_raw_text,
+        ocr_raw_text: finalOcrRawText,
         ocr_confidence
       },
       file

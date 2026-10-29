@@ -719,6 +719,68 @@ export function BillOcrModal({ isOpen, onClose, onBillSaved, vendors = [] }) {
             }))
         : [];
 
+      // Construct definitive line items list reflecting all user edits
+      const finalItemsList = inwardStockItems.map(it => {
+        const qty = parseFloat(it.quantity) || 1;
+        const rate = it.rate !== '' && it.rate !== null && it.rate !== undefined ? parseFloat(it.rate) : null;
+        const amt = it.amount !== '' && it.amount !== null && it.amount !== undefined
+          ? parseFloat(it.amount)
+          : (rate !== null ? Math.round(qty * rate * 100) / 100 : null);
+        return {
+          description: (it.detected_desc || it.material_name || 'Item').trim(),
+          quantity: qty,
+          unit: it.unit || 'kg',
+          rate: rate,
+          amount: amt
+        };
+      });
+
+      // Construct dynamic items summary
+      const dynamicItemsSummary = finalItemsList.map(it => {
+        const rateStr = it.rate !== null ? ` @ ${Number(it.rate).toFixed(2)}` : '';
+        const amtStr = it.amount !== null ? ` = ${Number(it.amount).toFixed(2)}` : '';
+        return `- ${it.description}: ${it.quantity} ${it.unit}${rateStr}${amtStr}`;
+      }).join('\n');
+
+      // Preserve user custom remarks while updating items list
+      let finalNotes = reviewFields.notes || '';
+      if (dynamicItemsSummary) {
+        if (finalNotes.includes('- ') || !finalNotes) {
+          const userRemarks = finalNotes
+            .split('\n')
+            .filter(line => !line.trim().startsWith('-'))
+            .join('\n')
+            .trim();
+          finalNotes = userRemarks ? `${dynamicItemsSummary}\n\n${userRemarks}` : dynamicItemsSummary;
+        } else {
+          finalNotes = `${dynamicItemsSummary}\n\n${finalNotes}`;
+        }
+      }
+
+      // Reconstruct ocr_raw_text with edited items, rates, quantities, and totals
+      let updatedOcrJson = null;
+      try {
+        const base = ocrData && ocrData.rawText ? JSON.parse(ocrData.rawText) : {};
+        base.items = finalItemsList;
+        base.totalAmount = total;
+        base.subtotal = itemsTotalSum > 0 ? itemsTotalSum : total;
+        base.itemsSummary = dynamicItemsSummary;
+        base.notes = finalNotes;
+        updatedOcrJson = JSON.stringify(base, null, 2);
+      } catch (_) {
+        updatedOcrJson = JSON.stringify({
+          items: finalItemsList,
+          totalAmount: total,
+          subtotal: itemsTotalSum > 0 ? itemsTotalSum : total,
+          itemsSummary: dynamicItemsSummary,
+          notes: finalNotes
+        }, null, 2);
+      }
+
+      const finalSubtotal = itemsTotalSum > 0
+        ? itemsTotalSum
+        : (parseFloat(reviewFields.subtotal) || total);
+
       // Determine payment amount & method
       let paidAmt = 0;
       let expMethod = reviewFields.expensePaymentMethod;
@@ -737,8 +799,8 @@ export function BillOcrModal({ isOpen, onClose, onBillSaved, vendors = [] }) {
         bill_date: reviewFields.invoiceDate || null,
         due_date: reviewFields.dueDate || null,
         po_number: reviewFields.poNumber || null,
-        subtotal: reviewFields.subtotal || null,
-        taxable_amount: reviewFields.taxableAmount || null,
+        subtotal: finalSubtotal,
+        taxable_amount: reviewFields.taxableAmount || finalSubtotal,
         cgst: reviewFields.cgst || null,
         sgst: reviewFields.sgst || null,
         igst: reviewFields.igst || null,
@@ -746,10 +808,10 @@ export function BillOcrModal({ isOpen, onClose, onBillSaved, vendors = [] }) {
         discount: reviewFields.discount || null,
         total_amount: total,
         paid_amount: paidAmt,
-        notes: reviewFields.notes || null,
+        notes: finalNotes || null,
         ocr_status: ocrData ? ocrData.ocrStatus : 'manual',
         ocr_confidence: ocrData ? ocrData.ocrConfidence : null,
-        ocr_raw_text: ocrData ? ocrData.rawText : null,
+        ocr_raw_text: updatedOcrJson,
         stored_filename: storedFileInfo ? storedFileInfo.filename : null,
         stored_originalname: storedFileInfo ? storedFileInfo.originalname : (selectedFile ? selectedFile.name : null),
         stored_mimetype: storedFileInfo ? storedFileInfo.mimetype : (selectedFile ? selectedFile.type : null),
