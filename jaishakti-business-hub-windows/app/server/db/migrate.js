@@ -1787,6 +1787,209 @@ export function runMigrations(dbInstance = null) {
     console.log('Migration 016_sync_vendor_expense_categories already applied.');
   }
 
+  // Migration 017: 3-Tier Inventory Architecture (Loose Finished Stock & Retail Packaged Products)
+  if (!appliedMigrations.includes('017_three_tier_inventory')) {
+    console.log('Applying migration: 017_three_tier_inventory...');
+    (() => {
+      const BIZ_ID = 'biz_jaishakti_001';
+      const now = new Date().toISOString();
+
+      db.transaction(() => {
+        // 1. Create finished_products table
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS finished_products (
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            recipe_id TEXT REFERENCES recipes(id),
+            name_en TEXT NOT NULL,
+            name_gu TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'namkeen',
+            current_loose_stock REAL NOT NULL DEFAULT 0,
+            min_loose_stock_alert REAL NOT NULL DEFAULT 10,
+            unit TEXT NOT NULL DEFAULT 'kg',
+            shelf_life_days INTEGER DEFAULT 30,
+            notes TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+        `);
+
+        // 2. Create packaged_products table
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS packaged_products (
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            finished_product_id TEXT NOT NULL REFERENCES finished_products(id) ON DELETE CASCADE,
+            package_weight_grams REAL NOT NULL,
+            package_weight_label TEXT NOT NULL,
+            barcode TEXT,
+            sku TEXT,
+            current_packet_stock INTEGER NOT NULL DEFAULT 0,
+            min_packet_stock_alert INTEGER NOT NULL DEFAULT 10,
+            selling_price REAL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+        `);
+
+        // 3. Create packaging_runs table
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS packaging_runs (
+            id TEXT PRIMARY KEY,
+            business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+            run_number TEXT NOT NULL,
+            finished_product_id TEXT NOT NULL REFERENCES finished_products(id),
+            total_weight_deducted REAL NOT NULL,
+            loose_stock_before REAL NOT NULL,
+            loose_stock_after REAL NOT NULL,
+            run_date TEXT NOT NULL,
+            notes TEXT,
+            packed_by TEXT REFERENCES users(id),
+            created_at TEXT NOT NULL
+          );
+        `);
+
+        // 4. Create packaging_run_items table
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS packaging_run_items (
+            id TEXT PRIMARY KEY,
+            packaging_run_id TEXT NOT NULL REFERENCES packaging_runs(id) ON DELETE CASCADE,
+            packaged_product_id TEXT NOT NULL REFERENCES packaged_products(id),
+            package_weight_grams REAL NOT NULL,
+            packet_count INTEGER NOT NULL,
+            subtotal_weight_kg REAL NOT NULL,
+            created_at TEXT NOT NULL
+          );
+        `);
+
+        // 5. Indexes
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_fin_prod_biz ON finished_products(business_id, is_active);
+          CREATE INDEX IF NOT EXISTS idx_pkg_prod_biz ON packaged_products(business_id, finished_product_id, is_active);
+          CREATE INDEX IF NOT EXISTS idx_pkg_runs_biz ON packaging_runs(business_id, run_date DESC);
+          CREATE INDEX IF NOT EXISTS idx_pkg_run_items ON packaging_run_items(packaging_run_id);
+        `);
+
+        // 6. Seed initial finished products & packaged products
+        const existingCount = db.prepare('SELECT COUNT(*) as count FROM finished_products WHERE business_id = ?').get(BIZ_ID)?.count || 0;
+        if (existingCount === 0) {
+          const defaultProducts = [
+            {
+              id: 'fp_bhakharwadi',
+              recipe_id: 'rcp_bhakharwadi_01',
+              en: 'Bhakharwadi',
+              gu: 'ભાખરવડી',
+              category: 'namkeen',
+              loose_stock: 45.0,
+              alert: 10.0,
+              packages: [
+                { id: 'pkg_bhak_250', grams: 250, label: '250g', barcode: 'JS-BHAK-250', sku: 'JS-BHAK-250', price: 90, stock: 35, alert: 10 },
+                { id: 'pkg_bhak_500', grams: 500, label: '500g', barcode: 'JS-BHAK-500', sku: 'JS-BHAK-500', price: 170, stock: 24, alert: 10 }
+              ]
+            },
+            {
+              id: 'fp_lilo_chevdo',
+              recipe_id: 'rcp_chevdo_01',
+              en: 'Lilo / Suko Chevdo',
+              gu: 'લીલો / સૂકો ચેવડો',
+              category: 'namkeen',
+              loose_stock: 30.0,
+              alert: 10.0,
+              packages: [
+                { id: 'pkg_chev_250', grams: 250, label: '250g', barcode: 'JS-CHEV-250', sku: 'JS-CHEV-250', price: 80, stock: 20, alert: 10 },
+                { id: 'pkg_chev_500', grams: 500, label: '500g', barcode: 'JS-CHEV-500', sku: 'JS-CHEV-500', price: 150, stock: 18, alert: 10 }
+              ]
+            },
+            {
+              id: 'fp_ratlami_sev',
+              recipe_id: null,
+              en: 'Ratlami Sev',
+              gu: 'રતલામી સેવ',
+              category: 'namkeen',
+              loose_stock: 40.0,
+              alert: 10.0,
+              packages: [
+                { id: 'pkg_rat_250', grams: 250, label: '250g', barcode: 'JS-RAT-250', sku: 'JS-RAT-250', price: 70, stock: 30, alert: 10 },
+                { id: 'pkg_rat_500', grams: 500, label: '500g', barcode: 'JS-RAT-500', sku: 'JS-RAT-500', price: 130, stock: 25, alert: 10 }
+              ]
+            },
+            {
+              id: 'fp_bhavnagari_gathiya',
+              recipe_id: 'rcp_gathiya_01',
+              en: 'Bhavnagari Gathiya',
+              gu: 'ભાવનગરી ગાંઠિયા',
+              category: 'namkeen',
+              loose_stock: 25.0,
+              alert: 8.0,
+              packages: [
+                { id: 'pkg_gath_250', grams: 250, label: '250g', barcode: 'JS-GATH-250', sku: 'JS-GATH-250', price: 70, stock: 20, alert: 8 },
+                { id: 'pkg_gath_500', grams: 500, label: '500g', barcode: 'JS-GATH-500', sku: 'JS-GATH-500', price: 130, stock: 15, alert: 8 }
+              ]
+            },
+            {
+              id: 'fp_nylon_khaman',
+              recipe_id: 'rcp_khaman_01',
+              en: 'Nylon Khaman Dhokla',
+              gu: 'નાયલોન ખમણ ઢોકળા',
+              category: 'daily_farsan',
+              loose_stock: 15.0,
+              alert: 5.0,
+              packages: [
+                { id: 'pkg_kham_500', grams: 500, label: '500g', barcode: 'JS-KHAM-500', sku: 'JS-KHAM-500', price: 100, stock: 10, alert: 5 }
+              ]
+            },
+            {
+              id: 'fp_batata_chevdo',
+              recipe_id: null,
+              en: 'Batata Chevdo (Farali)',
+              gu: 'બટાકા ચેવડો (ફરાળી)',
+              category: 'namkeen',
+              loose_stock: 20.0,
+              alert: 5.0,
+              packages: [
+                { id: 'pkg_bat_250', grams: 250, label: '250g', barcode: 'JS-BAT-250', sku: 'JS-BAT-250', price: 90, stock: 25, alert: 8 },
+                { id: 'pkg_bat_500', grams: 500, label: '500g', barcode: 'JS-BAT-500', sku: 'JS-BAT-500', price: 170, stock: 16, alert: 8 }
+              ]
+            }
+          ];
+
+          const insertFp = db.prepare(`
+            INSERT INTO finished_products (
+              id, business_id, recipe_id, name_en, name_gu, category,
+              current_loose_stock, min_loose_stock_alert, unit, is_active,
+              created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'kg', 1, ?, ?)
+          `);
+
+          const insertPkg = db.prepare(`
+            INSERT INTO packaged_products (
+              id, business_id, finished_product_id, package_weight_grams,
+              package_weight_label, barcode, sku, current_packet_stock,
+              min_packet_stock_alert, selling_price, is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+          `);
+
+          for (const fp of defaultProducts) {
+            insertFp.run(fp.id, BIZ_ID, fp.recipe_id, fp.en, fp.gu, fp.category, fp.loose_stock, fp.alert, now, now);
+            for (const pkg of fp.packages) {
+              insertPkg.run(pkg.id, BIZ_ID, fp.id, pkg.grams, pkg.label, pkg.barcode, pkg.sku, pkg.stock, pkg.alert, pkg.price, now, now);
+            }
+          }
+        }
+
+        db.prepare('INSERT INTO migrations (name, executed_at) VALUES (?, ?)').run(
+          '017_three_tier_inventory',
+          now
+        );
+      })();
+    })();
+    console.log('Migration 017_three_tier_inventory applied successfully.');
+  } else {
+    console.log('Migration 017_three_tier_inventory already applied.');
+  }
+
   return true;
 }
 

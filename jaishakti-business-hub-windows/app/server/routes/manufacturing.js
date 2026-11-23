@@ -308,4 +308,186 @@ router.get('/batches/:id', (req, res) => {
   }
 });
 
+// ==========================================
+// 4. TIER 2: LOOSE FINISHED PRODUCTS
+// ==========================================
+
+// GET /api/manufacturing/finished-products
+router.get('/finished-products', (req, res) => {
+  try {
+    const { category, search } = req.query;
+    const products = ManufacturingService.getFinishedProducts(req.user.business_id, { category, search });
+    res.json({ success: true, products });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/manufacturing/finished-products/:id
+router.get('/finished-products/:id', (req, res) => {
+  try {
+    const product = ManufacturingService.getFinishedProductById(req.user.business_id, req.params.id);
+    if (!product) {
+      return res.status(404).json({ success: false, error: 'Finished product not found.' });
+    }
+    res.json({ success: true, product });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/manufacturing/finished-products
+router.post('/finished-products', (req, res) => {
+  try {
+    if (req.user.role !== 'owner' && !req.user.permissions?.can_manage_stock) {
+      return res.status(403).json({ success: false, error: 'Unauthorized to add finished products.' });
+    }
+    const product = ManufacturingService.createFinishedProduct(req.user, req.body);
+    res.status(201).json({ success: true, product });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// PUT /api/manufacturing/finished-products/:id
+router.put('/finished-products/:id', (req, res) => {
+  try {
+    if (req.user.role !== 'owner' && !req.user.permissions?.can_manage_stock) {
+      return res.status(403).json({ success: false, error: 'Unauthorized to update finished products.' });
+    }
+    const product = ManufacturingService.updateFinishedProduct(req.user, req.params.id, req.body);
+    res.json({ success: true, product });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE /api/manufacturing/finished-products/:id
+router.delete('/finished-products/:id', (req, res) => {
+  try {
+    if (req.user.role !== 'owner' && !req.user.permissions?.can_manage_stock) {
+      return res.status(403).json({ success: false, error: 'Unauthorized to delete finished products.' });
+    }
+    const result = ManufacturingService.deleteFinishedProduct(req.user, req.params.id);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/manufacturing/finished-products/:id/adjust
+router.post('/finished-products/:id/adjust', (req, res) => {
+  try {
+    if (req.user.role !== 'owner' && !req.user.permissions?.can_manage_stock) {
+      return res.status(403).json({ success: false, error: 'Unauthorized to adjust loose stock.' });
+    }
+    const result = ManufacturingService.adjustLooseStock(req.user, req.params.id, req.body);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// 5. TIER 3: PACKAGED PRODUCTS & BARCODES
+// ==========================================
+
+// GET /api/manufacturing/packaged-products
+router.get('/packaged-products', (req, res) => {
+  try {
+    const { finished_product_id, search, low_stock } = req.query;
+    const products = ManufacturingService.getPackagedProducts(req.user.business_id, {
+      finished_product_id,
+      search,
+      low_stock: low_stock === 'true' || low_stock === '1'
+    });
+    res.json({ success: true, products });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/manufacturing/packaged-products
+router.post('/packaged-products', (req, res) => {
+  try {
+    if (req.user.role !== 'owner' && !req.user.permissions?.can_manage_stock) {
+      return res.status(403).json({ success: false, error: 'Unauthorized to add packaged product variant.' });
+    }
+    const variant = ManufacturingService.createPackagedVariant(req.user, req.body);
+    res.status(201).json({ success: true, variant });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// PUT /api/manufacturing/packaged-products/:id
+router.put('/packaged-products/:id', (req, res) => {
+  try {
+    if (req.user.role !== 'owner' && !req.user.permissions?.can_manage_stock) {
+      return res.status(403).json({ success: false, error: 'Unauthorized to update packaged variant.' });
+    }
+    const variant = ManufacturingService.updatePackagedVariant(req.user, req.params.id, req.body);
+    res.json({ success: true, variant });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE /api/manufacturing/packaged-products/:id
+router.delete('/packaged-products/:id', (req, res) => {
+  try {
+    if (req.user.role !== 'owner' && !req.user.permissions?.can_manage_stock) {
+      return res.status(403).json({ success: false, error: 'Unauthorized to delete packaged variant.' });
+    }
+    const result = ManufacturingService.deletePackagedVariant(req.user, req.params.id);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/manufacturing/packaged-products/:id/adjust
+router.post('/packaged-products/:id/adjust', (req, res) => {
+  try {
+    if (req.user.role !== 'owner' && !req.user.permissions?.can_manage_stock) {
+      return res.status(403).json({ success: false, error: 'Unauthorized to adjust packet stock.' });
+    }
+    const result = ManufacturingService.adjustPackagedStock(req.user, req.params.id, req.body);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// 6. PACKAGING RUNS (CONVERT LOOSE -> RETAIL)
+// ==========================================
+
+// POST /api/manufacturing/packaging-runs
+router.post('/packaging-runs', (req, res) => {
+  try {
+    if (req.user.role !== 'owner' && !req.user.permissions?.can_record_production && !req.user.permissions?.can_manage_stock) {
+      return res.status(403).json({ success: false, error: 'Unauthorized to record packaging runs.' });
+    }
+    const run = ManufacturingService.recordPackagingRun(req.user, req.body);
+    res.status(201).json({ success: true, run });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/manufacturing/packaging-runs
+router.get('/packaging-runs', (req, res) => {
+  try {
+    const { finished_product_id, limit } = req.query;
+    const runs = ManufacturingService.getPackagingRuns(req.user.business_id, {
+      finished_product_id,
+      limit: parseInt(limit, 10) || 50
+    });
+    res.json({ success: true, runs });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 export default router;

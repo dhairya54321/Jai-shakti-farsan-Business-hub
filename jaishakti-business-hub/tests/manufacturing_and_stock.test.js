@@ -331,4 +331,127 @@ describe('Phase 2 (Part B): Manufacturing, Recipe Vault & Raw Materials Stock Te
       db.prepare("UPDATE raw_materials SET current_stock = ? WHERE id = 'rm_chana_dal_30kg'").run(initialStock);
     });
   });
+
+  // ==========================================
+  // MODULE 6: 3-TIER INVENTORY & PACKAGING RUNS
+  // ==========================================
+  describe('6. 3-Tier Inventory Architecture & Packaging Runs', () => {
+    test('Retrieve Tier 2 loose finished products with their packaged retail variants', () => {
+      const finishedProducts = ManufacturingService.getFinishedProducts(testBizId);
+      assert.ok(finishedProducts.length >= 5);
+
+      const bhakharwadi = finishedProducts.find(fp => fp.id === 'fp_bhakharwadi');
+      assert.ok(bhakharwadi);
+      assert.equal(bhakharwadi.name_gu, 'ભાખરવડી');
+      assert.ok(bhakharwadi.current_loose_stock > 0);
+      assert.ok(bhakharwadi.packages.length >= 2);
+
+      const p250 = bhakharwadi.packages.find(p => p.package_weight_grams === 250);
+      assert.ok(p250);
+      assert.equal(p250.barcode, 'JS-BHAK-250');
+      assert.equal(p250.selling_price, 90);
+    });
+
+    test('Manual stock adjustment on loose finished farsan (gain/loss)', () => {
+      const fp = ManufacturingService.getFinishedProductById(testBizId, 'fp_ratlami_sev');
+      const initialStock = fp.current_loose_stock;
+
+      // Add 5 kg loose stock
+      const adjustRes = ManufacturingService.adjustLooseStock(ownerUser, 'fp_ratlami_sev', {
+        transaction_type: 'inward_manual',
+        quantity: 5,
+        notes: 'Extra kitchen batch tray'
+      });
+      assert.equal(adjustRes.stockAfter, initialStock + 5);
+
+      // Revert
+      ManufacturingService.adjustLooseStock(ownerUser, 'fp_ratlami_sev', {
+        transaction_type: 'adjustment_loss',
+        quantity: 5,
+        notes: 'Revert test'
+      });
+    });
+
+    test('Record packaging run: deducts loose weight and credits retail packet counts', () => {
+      const bhakharwadiBefore = ManufacturingService.getFinishedProductById(testBizId, 'fp_bhakharwadi');
+      const looseBefore = bhakharwadiBefore.current_loose_stock;
+      const pkg250Before = bhakharwadiBefore.packages.find(p => p.package_weight_grams === 250).current_packet_stock;
+      const pkg500Before = bhakharwadiBefore.packages.find(p => p.package_weight_grams === 500).current_packet_stock;
+
+      // Pack 20x 250g (5 kg) and 10x 500g (5 kg) = 10 kg total
+      const runRes = ManufacturingService.recordPackagingRun(ownerUser, {
+        finished_product_id: 'fp_bhakharwadi',
+        notes: 'Morning packing station run',
+        items: [
+          { packaged_product_id: 'pkg_bhak_250', packet_count: 20 },
+          { packaged_product_id: 'pkg_bhak_500', packet_count: 10 }
+        ]
+      });
+
+      assert.ok(runRes.id);
+      assert.ok(runRes.run_number.startsWith('PKG-'));
+      assert.equal(runRes.total_weight_deducted, 10.0);
+      assert.equal(runRes.loose_stock_after, looseBefore - 10.0);
+
+      // Verify finished product loose stock was deducted
+      const bhakharwadiAfter = ManufacturingService.getFinishedProductById(testBizId, 'fp_bhakharwadi');
+      assert.equal(bhakharwadiAfter.current_loose_stock, looseBefore - 10.0);
+
+      // Verify packaged products stock was incremented
+      const p250After = bhakharwadiAfter.packages.find(p => p.package_weight_grams === 250);
+      const p500After = bhakharwadiAfter.packages.find(p => p.package_weight_grams === 500);
+      assert.equal(p250After.current_packet_stock, pkg250Before + 20);
+      assert.equal(p500After.current_packet_stock, pkg500Before + 10);
+
+      // Verify packaging run was logged
+      const runs = ManufacturingService.getPackagingRuns(testBizId, { finished_product_id: 'fp_bhakharwadi' });
+      assert.ok(runs.length >= 1);
+      assert.equal(runs[0].total_weight_deducted, 10.0);
+      assert.equal(runs[0].items.length, 2);
+    });
+
+    test('Reject packaging run when requested weight exceeds available loose stock', () => {
+      const bhakharwadi = ManufacturingService.getFinishedProductById(testBizId, 'fp_bhakharwadi');
+      const availableLoose = bhakharwadi.current_loose_stock;
+
+      // Attempt to pack 1,000 packets of 500g = 500 kg (far exceeds available loose stock)
+      assert.throws(() => {
+        ManufacturingService.recordPackagingRun(ownerUser, {
+          finished_product_id: 'fp_bhakharwadi',
+          items: [
+            { packaged_product_id: 'pkg_bhak_500', packet_count: 1000 }
+          ]
+        });
+      }, /Cannot pack/);
+    });
+
+    test('Kitchen batch completion automatically credits loose stock of matched finished product', () => {
+      const bhakharwadiBefore = ManufacturingService.getFinishedProductById(testBizId, 'fp_bhakharwadi');
+      const looseBefore = bhakharwadiBefore.current_loose_stock;
+
+      // Complete a 10 kg Bhakharwadi production batch
+      const batchRes = ManufacturingService.createProductionBatch(chefUser, {
+        recipe_id: 'rcp_bhakharwadi_01',
+        target_weight: 10,
+        chef_name: 'Sailesh Bhai',
+        notes: 'Fresh afternoon batch'
+      });
+
+      assert.equal(batchRes.loose_stock_credited, true);
+      assert.equal(batchRes.finished_product_name, 'Bhakharwadi');
+
+      // Verify loose stock increased by exactly 10 kg
+      const bhakharwadiAfter = ManufacturingService.getFinishedProductById(testBizId, 'fp_bhakharwadi');
+      assert.equal(bhakharwadiAfter.current_loose_stock, looseBefore + 10);
+    });
+
+    test('Dashboard inventory stats reflect 3 tiers (raw materials, loose farsan kg, retail packets)', () => {
+      const stats = ManufacturingService.getInventoryDashboardStats(testBizId);
+      assert.ok(stats.total_materials > 0);
+      assert.ok(stats.total_loose_count > 0);
+      assert.ok(stats.total_loose_kg > 0);
+      assert.ok(stats.total_packaged_count > 0);
+      assert.ok(stats.total_retail_packets > 0);
+    });
+  });
 });

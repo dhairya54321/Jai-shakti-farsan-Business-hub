@@ -945,11 +945,29 @@ export const ManufacturingService = {
         });
       }
 
+      // 3. Automatic Credit to Loose Finished Product Stock
+      let looseStockCredited = false;
+      let matchedFinishedProduct = db.prepare(`
+        SELECT * FROM finished_products
+        WHERE business_id = ? AND is_active = 1 AND (recipe_id = ? OR LOWER(name_en) = LOWER(?) OR name_gu = ?)
+        LIMIT 1
+      `).get(user.business_id, recipe.id, recipe.name_en, recipe.name_gu);
+
+      if (matchedFinishedProduct) {
+        const looseBefore = matchedFinishedProduct.current_loose_stock || 0;
+        const looseAfter = looseBefore + target;
+        db.prepare(`
+          UPDATE finished_products SET current_loose_stock = ?, updated_at = ? WHERE id = ?
+        `).run(looseAfter, now, matchedFinishedProduct.id);
+        looseStockCredited = true;
+      }
+
       recordAudit(db, user, 'production_batches', batchId, 'create', null, {
         batchNumber,
         product: recipe.name_en,
         weight: target,
-        ingredientsCount: recipe.ingredients.length
+        ingredientsCount: recipe.ingredients.length,
+        looseStockCredited
       });
 
       return {
@@ -960,7 +978,9 @@ export const ManufacturingService = {
         target_weight: target,
         chef_name: chef_name || user.full_name,
         production_date: dateStr,
-        consumed: consumedList
+        consumed: consumedList,
+        loose_stock_credited: looseStockCredited,
+        finished_product_name: matchedFinishedProduct ? matchedFinishedProduct.name_en : null
       };
     })();
   },
@@ -1059,14 +1079,674 @@ export const ManufacturingService = {
       ORDER BY created_at DESC, rowid DESC LIMIT 5
     `).all(businessId);
 
+    const looseStockStats = db.prepare(`
+      SELECT COUNT(*) as count, COALESCE(SUM(current_loose_stock), 0) as total_kg
+      FROM finished_products
+      WHERE business_id = ? AND is_active = 1
+    `).get(businessId) || { count: 0, total_kg: 0 };
+
+    const packagedStockStats = db.prepare(`
+      SELECT COUNT(*) as count, COALESCE(SUM(current_packet_stock), 0) as total_packets
+      FROM packaged_products
+      WHERE business_id = ? AND is_active = 1
+    `).get(businessId) || { count: 0, total_packets: 0 };
+
+    const lowStockFinished = db.prepare(`
+      SELECT COUNT(*) as count FROM finished_products
+      WHERE business_id = ? AND is_active = 1 AND current_loose_stock <= min_loose_stock_alert
+    `).get(businessId)?.count || 0;
+
+    const lowStockPackaged = db.prepare(`
+      SELECT COUNT(*) as count FROM packaged_products
+      WHERE business_id = ? AND is_active = 1 AND current_packet_stock <= min_packet_stock_alert
+    `).get(businessId)?.count || 0;
+
     return {
       total_materials: materialsCount,
       low_stock_count: lowStockMaterials.length,
       low_stock_items: lowStockMaterials,
       today_batches_count: todayBatches.count,
       today_total_kg: todayBatches.total_kg,
-      recent_batches: recentBatches
+      recent_batches: recentBatches,
+      total_loose_count: looseStockStats.count,
+      total_loose_kg: Math.round(looseStockStats.total_kg * 10) / 10,
+      total_packaged_count: packagedStockStats.count,
+      total_retail_packets: packagedStockStats.total_packets,
+      low_stock_finished_count: lowStockFinished,
+      low_stock_packaged_count: lowStockPackaged
     };
+  },
+
+  // ==========================================
+  // 5. TIER 2: LOOSE FINISHED PRODUCTS (Kg)
+  // ==========================================
+
+  getFinishedProducts(businessId, options = {}) {
+    const db = getDatabase();
+    let query = `
+      SELECT fp.*, r.name_en as recipe_name_en, r.name_gu as recipe_name_gu
+      FROM finished_products fp
+      LEFT JOIN recipes r ON r.id = fp.recipe_id
+      WHERE fp.business_id = ? AND fp.is_active = 1
+    `;
+    const params = [businessId];
+
+    if (options.category && options.category !== 'all') {
+      query += ` AND fp.category = ?`;
+      params.push(options.category);
+    }
+
+    if (options.search) {
+      const term = `%${options.search.trim()}%`;
+      query += ` AND (fp.name_en LIKE ? OR fp.name_gu LIKE ? OR fp.category LIKE ?)`;
+      params.push(term, term, term);
+    }
+
+    query += ` ORDER BY fp.name_en ASC`;
+
+    const rows = db.prepare(query).all(...params);
+
+    const getPackagesStmt = db.prepare(`
+      SELECT * FROM packaged_products
+      WHERE finished_product_id = ? AND is_active = 1
+      ORDER BY package_weight_grams ASC
+    `);
+
+    return rows.map(r => {
+      const packages = getPackagesStmt.all(r.id);
+      const isLowStock = Number(r.current_loose_stock) <= Number(r.min_loose_stock_alert);
+      const totalPackets = packages.reduce((sum, p) => sum + (p.current_packet_stock || 0), 0);
+      return {
+        ...r,
+        is_low_stock: isLowStock,
+        packages,
+        total_packets: totalPackets
+      };
+    });
+  },
+
+  getFinishedProductById(businessId, id) {
+    const db = getDatabase();
+    const row = db.prepare(`
+      SELECT fp.*, r.name_en as recipe_name_en, r.name_gu as recipe_name_gu
+      FROM finished_products fp
+      LEFT JOIN recipes r ON r.id = fp.recipe_id
+      WHERE fp.business_id = ? AND fp.id = ?
+    `).get(businessId, id);
+
+    if (!row) return null;
+
+    const packages = db.prepare(`
+      SELECT * FROM packaged_products
+      WHERE finished_product_id = ? AND is_active = 1
+      ORDER BY package_weight_grams ASC
+    `).all(id);
+
+    return {
+      ...row,
+      is_low_stock: Number(row.current_loose_stock) <= Number(row.min_loose_stock_alert),
+      packages,
+      total_packets: packages.reduce((sum, p) => sum + (p.current_packet_stock || 0), 0)
+    };
+  },
+
+  createFinishedProduct(user, data) {
+    const db = getDatabase();
+    const {
+      name_en,
+      name_gu,
+      category = 'namkeen',
+      recipe_id = null,
+      initial_loose_stock = 0,
+      min_loose_stock_alert = 10,
+      unit = 'kg',
+      shelf_life_days = 30,
+      notes = null,
+      packages = []
+    } = data;
+
+    if (!name_en?.trim() || !name_gu?.trim()) {
+      throw new Error('English and Gujarati names are required for finished products.');
+    }
+
+    const id = 'fp_' + crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    return db.transaction(() => {
+      db.prepare(`
+        INSERT INTO finished_products (
+          id, business_id, recipe_id, name_en, name_gu, category,
+          current_loose_stock, min_loose_stock_alert, unit, shelf_life_days,
+          notes, is_active, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+      `).run(
+        id,
+        user.business_id,
+        recipe_id || null,
+        name_en.trim(),
+        name_gu.trim(),
+        category,
+        Number(initial_loose_stock) || 0,
+        Number(min_loose_stock_alert) || 10,
+        unit || 'kg',
+        Number(shelf_life_days) || 30,
+        notes || null,
+        now,
+        now
+      );
+
+      // Create packaged variants if provided
+      if (Array.isArray(packages) && packages.length > 0) {
+        const insertPkg = db.prepare(`
+          INSERT INTO packaged_products (
+            id, business_id, finished_product_id, package_weight_grams,
+            package_weight_label, barcode, sku, current_packet_stock,
+            min_packet_stock_alert, selling_price, is_active, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        `);
+
+        for (const p of packages) {
+          const grams = Number(p.package_weight_grams) || 250;
+          const label = p.package_weight_label || `${grams}g`;
+          const barcode = p.barcode || `JS-${name_en.slice(0, 4).toUpperCase()}-${grams}`;
+          insertPkg.run(
+            'pkg_' + crypto.randomUUID(),
+            user.business_id,
+            id,
+            grams,
+            label,
+            barcode,
+            p.sku || barcode,
+            Number(p.current_packet_stock) || 0,
+            Number(p.min_packet_stock_alert) || 10,
+            Number(p.selling_price) || 0,
+            now,
+            now
+          );
+        }
+      }
+
+      recordAudit(db, user, 'finished_products', id, 'create', null, data);
+      return this.getFinishedProductById(user.business_id, id);
+    })();
+  },
+
+  updateFinishedProduct(user, id, data) {
+    const db = getDatabase();
+    const existing = this.getFinishedProductById(user.business_id, id);
+    if (!existing) {
+      throw new Error('Finished product not found.');
+    }
+
+    const {
+      name_en,
+      name_gu,
+      category,
+      recipe_id,
+      min_loose_stock_alert,
+      shelf_life_days,
+      notes
+    } = data;
+
+    const now = new Date().toISOString();
+
+    db.prepare(`
+      UPDATE finished_products SET
+        name_en = COALESCE(?, name_en),
+        name_gu = COALESCE(?, name_gu),
+        category = COALESCE(?, category),
+        recipe_id = ?,
+        min_loose_stock_alert = COALESCE(?, min_loose_stock_alert),
+        shelf_life_days = COALESCE(?, shelf_life_days),
+        notes = ?,
+        updated_at = ?
+      WHERE id = ? AND business_id = ?
+    `).run(
+      name_en?.trim() || null,
+      name_gu?.trim() || null,
+      category || null,
+      recipe_id !== undefined ? recipe_id : existing.recipe_id,
+      min_loose_stock_alert !== undefined ? Number(min_loose_stock_alert) : null,
+      shelf_life_days !== undefined ? Number(shelf_life_days) : null,
+      notes !== undefined ? notes : existing.notes,
+      now,
+      id,
+      user.business_id
+    );
+
+    recordAudit(db, user, 'finished_products', id, 'update', existing, data);
+    return this.getFinishedProductById(user.business_id, id);
+  },
+
+  adjustLooseStock(user, id, adjustment) {
+    const db = getDatabase();
+    const product = this.getFinishedProductById(user.business_id, id);
+    if (!product) {
+      throw new Error('Finished product not found.');
+    }
+
+    const { transaction_type, quantity, notes } = adjustment;
+    const qty = Number(quantity);
+
+    if (isNaN(qty) || qty <= 0) {
+      throw new Error('Quantity must be a positive number in kg.');
+    }
+
+    const stockBefore = product.current_loose_stock || 0;
+    let stockAfter = stockBefore;
+
+    if (transaction_type === 'inward_manual' || transaction_type === 'adjustment_gain') {
+      stockAfter = stockBefore + qty;
+    } else if (transaction_type === 'adjustment_loss') {
+      stockAfter = Math.max(0, stockBefore - qty);
+    } else {
+      throw new Error('Invalid transaction type. Expected inward_manual, adjustment_gain, or adjustment_loss.');
+    }
+
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE finished_products SET current_loose_stock = ?, updated_at = ? WHERE id = ? AND business_id = ?
+    `).run(stockAfter, now, id, user.business_id);
+
+    recordAudit(db, user, 'finished_products', id, 'stock_adjust', { stockBefore }, { stockAfter, transaction_type, notes });
+
+    return {
+      product: this.getFinishedProductById(user.business_id, id),
+      stockBefore,
+      stockAfter
+    };
+  },
+
+  deleteFinishedProduct(user, id) {
+    const db = getDatabase();
+    const existing = this.getFinishedProductById(user.business_id, id);
+    if (!existing) {
+      throw new Error('Finished product not found.');
+    }
+
+    db.prepare(`
+      UPDATE finished_products SET is_active = 0, updated_at = ? WHERE id = ? AND business_id = ?
+    `).run(new Date().toISOString(), id, user.business_id);
+
+    recordAudit(db, user, 'finished_products', id, 'delete', existing, null);
+    return { success: true };
+  },
+
+  // ==========================================
+  // 6. TIER 3: PACKAGED PRODUCTS & BARCODES
+  // ==========================================
+
+  getPackagedProducts(businessId, options = {}) {
+    const db = getDatabase();
+    let query = `
+      SELECT pkg.*, fp.name_en as product_name_en, fp.name_gu as product_name_gu, fp.category, fp.current_loose_stock
+      FROM packaged_products pkg
+      JOIN finished_products fp ON fp.id = pkg.finished_product_id
+      WHERE pkg.business_id = ? AND pkg.is_active = 1 AND fp.is_active = 1
+    `;
+    const params = [businessId];
+
+    if (options.finished_product_id) {
+      query += ` AND pkg.finished_product_id = ?`;
+      params.push(options.finished_product_id);
+    }
+
+    if (options.search) {
+      const term = `%${options.search.trim()}%`;
+      query += ` AND (fp.name_en LIKE ? OR fp.name_gu LIKE ? OR pkg.barcode LIKE ? OR pkg.sku LIKE ? OR pkg.package_weight_label LIKE ?)`;
+      params.push(term, term, term, term, term);
+    }
+
+    query += ` ORDER BY fp.name_en ASC, pkg.package_weight_grams ASC`;
+
+    let rows = db.prepare(query).all(...params);
+
+    rows = rows.map(r => ({
+      ...r,
+      is_low_stock: Number(r.current_packet_stock) <= Number(r.min_packet_stock_alert)
+    }));
+
+    if (options.low_stock) {
+      rows = rows.filter(r => r.is_low_stock);
+    }
+
+    return rows;
+  },
+
+  createPackagedVariant(user, data) {
+    const db = getDatabase();
+    const {
+      finished_product_id,
+      package_weight_grams,
+      package_weight_label,
+      barcode,
+      sku,
+      initial_packet_stock = 0,
+      min_packet_stock_alert = 10,
+      selling_price = 0
+    } = data;
+
+    const fp = this.getFinishedProductById(user.business_id, finished_product_id);
+    if (!fp) {
+      throw new Error('Finished product not found.');
+    }
+
+    const grams = Number(package_weight_grams);
+    if (isNaN(grams) || grams <= 0) {
+      throw new Error('Package weight in grams must be greater than zero.');
+    }
+
+    const label = package_weight_label?.trim() || (grams >= 1000 ? `${grams / 1000}kg` : `${grams}g`);
+    const code = barcode?.trim() || `JS-${fp.name_en.slice(0, 4).toUpperCase()}-${grams}`;
+    const id = 'pkg_' + crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    db.prepare(`
+      INSERT INTO packaged_products (
+        id, business_id, finished_product_id, package_weight_grams,
+        package_weight_label, barcode, sku, current_packet_stock,
+        min_packet_stock_alert, selling_price, is_active, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    `).run(
+      id,
+      user.business_id,
+      finished_product_id,
+      grams,
+      label,
+      code,
+      sku?.trim() || code,
+      Number(initial_packet_stock) || 0,
+      Number(min_packet_stock_alert) || 10,
+      Number(selling_price) || 0,
+      now,
+      now
+    );
+
+    recordAudit(db, user, 'packaged_products', id, 'create', null, data);
+    return db.prepare('SELECT * FROM packaged_products WHERE id = ?').get(id);
+  },
+
+  updatePackagedVariant(user, id, data) {
+    const db = getDatabase();
+    const existing = db.prepare('SELECT * FROM packaged_products WHERE id = ? AND business_id = ?').get(id, user.business_id);
+    if (!existing) {
+      throw new Error('Packaged product variant not found.');
+    }
+
+    const {
+      package_weight_grams,
+      package_weight_label,
+      barcode,
+      sku,
+      current_packet_stock,
+      min_packet_stock_alert,
+      selling_price
+    } = data;
+
+    const now = new Date().toISOString();
+
+    db.prepare(`
+      UPDATE packaged_products SET
+        package_weight_grams = COALESCE(?, package_weight_grams),
+        package_weight_label = COALESCE(?, package_weight_label),
+        barcode = COALESCE(?, barcode),
+        sku = COALESCE(?, sku),
+        current_packet_stock = COALESCE(?, current_packet_stock),
+        min_packet_stock_alert = COALESCE(?, min_packet_stock_alert),
+        selling_price = COALESCE(?, selling_price),
+        updated_at = ?
+      WHERE id = ? AND business_id = ?
+    `).run(
+      package_weight_grams !== undefined ? Number(package_weight_grams) : null,
+      package_weight_label !== undefined ? package_weight_label.trim() : null,
+      barcode !== undefined ? barcode.trim() : null,
+      sku !== undefined ? sku.trim() : null,
+      current_packet_stock !== undefined ? Number(current_packet_stock) : null,
+      min_packet_stock_alert !== undefined ? Number(min_packet_stock_alert) : null,
+      selling_price !== undefined ? Number(selling_price) : null,
+      now,
+      id,
+      user.business_id
+    );
+
+    recordAudit(db, user, 'packaged_products', id, 'update', existing, data);
+    return db.prepare('SELECT * FROM packaged_products WHERE id = ?').get(id);
+  },
+
+  deletePackagedVariant(user, id) {
+    const db = getDatabase();
+    const existing = db.prepare('SELECT * FROM packaged_products WHERE id = ? AND business_id = ?').get(id, user.business_id);
+    if (!existing) {
+      throw new Error('Packaged product variant not found.');
+    }
+
+    db.prepare('UPDATE packaged_products SET is_active = 0, updated_at = ? WHERE id = ? AND business_id = ?').run(
+      new Date().toISOString(),
+      id,
+      user.business_id
+    );
+
+    recordAudit(db, user, 'packaged_products', id, 'delete', existing, null);
+    return { success: true };
+  },
+
+  adjustPackagedStock(user, id, adjustment) {
+    const db = getDatabase();
+    const existing = db.prepare('SELECT * FROM packaged_products WHERE id = ? AND business_id = ?').get(id, user.business_id);
+    if (!existing) {
+      throw new Error('Packaged product variant not found.');
+    }
+
+    const { transaction_type, quantity, notes } = adjustment;
+    const qty = parseInt(quantity, 10);
+    if (isNaN(qty) || qty <= 0) {
+      throw new Error('Quantity must be a positive integer.');
+    }
+
+    const stockBefore = existing.current_packet_stock || 0;
+    let stockAfter = stockBefore;
+
+    if (transaction_type === 'inward_manual' || transaction_type === 'adjustment_gain') {
+      stockAfter = stockBefore + qty;
+    } else if (transaction_type === 'adjustment_loss') {
+      stockAfter = Math.max(0, stockBefore - qty);
+    } else {
+      throw new Error('Invalid transaction type. Expected inward_manual, adjustment_gain, or adjustment_loss.');
+    }
+
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE packaged_products SET current_packet_stock = ?, updated_at = ? WHERE id = ? AND business_id = ?
+    `).run(stockAfter, now, id, user.business_id);
+
+    recordAudit(db, user, 'packaged_products', id, 'stock_adjust', { stockBefore }, { stockAfter, transaction_type, notes });
+
+    return {
+      variant: db.prepare('SELECT * FROM packaged_products WHERE id = ?').get(id),
+      stockBefore,
+      stockAfter
+    };
+  },
+
+  // ==========================================
+  // 7. PACKAGING RUNS (CONVERT LOOSE -> RETAIL)
+  // ==========================================
+
+  recordPackagingRun(user, data) {
+    const db = getDatabase();
+    const {
+      finished_product_id,
+      items = [], // [{ packaged_product_id, packet_count }]
+      notes,
+      run_date
+    } = data;
+
+    const fp = this.getFinishedProductById(user.business_id, finished_product_id);
+    if (!fp) {
+      throw new Error('Finished product not found.');
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new Error('At least one packaging item with packet count > 0 is required.');
+    }
+
+    // Validate items and calculate total weight in kilograms
+    const validItems = [];
+    let totalWeightKg = 0;
+
+    for (const item of items) {
+      const count = parseInt(item.packet_count, 10);
+      if (isNaN(count) || count <= 0) continue;
+
+      const pkg = db.prepare('SELECT * FROM packaged_products WHERE id = ? AND finished_product_id = ? AND is_active = 1').get(item.packaged_product_id, finished_product_id);
+      if (!pkg) {
+        throw new Error(`Packaged variant not found: ${item.packaged_product_id}`);
+      }
+
+      const itemWeightKg = (count * pkg.package_weight_grams) / 1000;
+      totalWeightKg += itemWeightKg;
+
+      validItems.push({
+        pkg,
+        count,
+        subtotal_weight_kg: itemWeightKg
+      });
+    }
+
+    if (validItems.length === 0) {
+      throw new Error('Enter a valid packet count greater than zero for at least one packet size.');
+    }
+
+    totalWeightKg = Math.round(totalWeightKg * 1000) / 1000;
+
+    const looseBefore = fp.current_loose_stock || 0;
+    if (totalWeightKg > looseBefore) {
+      throw new Error(`Cannot pack ${totalWeightKg} kg of ${fp.name_gu} (${fp.name_en}). Available loose stock is only ${looseBefore} kg.`);
+    }
+
+    const looseAfter = Math.round((looseBefore - totalWeightKg) * 1000) / 1000;
+    const now = new Date().toISOString();
+    const dateStr = run_date || now.slice(0, 10);
+    const dateCompact = dateStr.replace(/-/g, '');
+    const runNumber = `PKG-${dateCompact}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+    const runId = 'prun_' + crypto.randomUUID();
+
+    return db.transaction(() => {
+      // 1. Deduct loose stock from finished product
+      db.prepare(`
+        UPDATE finished_products SET current_loose_stock = ?, updated_at = ? WHERE id = ?
+      `).run(looseAfter, now, fp.id);
+
+      // 2. Insert packaging run header
+      db.prepare(`
+        INSERT INTO packaging_runs (
+          id, business_id, run_number, finished_product_id, total_weight_deducted,
+          loose_stock_before, loose_stock_after, run_date, notes, packed_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        runId,
+        user.business_id,
+        runNumber,
+        fp.id,
+        totalWeightKg,
+        looseBefore,
+        looseAfter,
+        dateStr,
+        notes || null,
+        user.id,
+        now
+      );
+
+      // 3. Increment packet counts and record run items
+      const insertItem = db.prepare(`
+        INSERT INTO packaging_run_items (
+          id, packaging_run_id, packaged_product_id, package_weight_grams,
+          packet_count, subtotal_weight_kg, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      const updateStock = db.prepare(`
+        UPDATE packaged_products SET current_packet_stock = current_packet_stock + ?, updated_at = ? WHERE id = ?
+      `);
+
+      const createdItems = [];
+
+      for (const vi of validItems) {
+        insertItem.run(
+          'pitem_' + crypto.randomUUID(),
+          runId,
+          vi.pkg.id,
+          vi.pkg.package_weight_grams,
+          vi.count,
+          vi.subtotal_weight_kg,
+          now
+        );
+
+        updateStock.run(vi.count, now, vi.pkg.id);
+
+        createdItems.push({
+          label: vi.pkg.package_weight_label,
+          grams: vi.pkg.package_weight_grams,
+          packets_packed: vi.count,
+          weight_kg: vi.subtotal_weight_kg
+        });
+      }
+
+      recordAudit(db, user, 'packaging_runs', runId, 'create', null, {
+        runNumber,
+        product: fp.name_en,
+        totalWeightKg,
+        looseBefore,
+        looseAfter,
+        itemsCount: createdItems.length
+      });
+
+      return {
+        id: runId,
+        run_number: runNumber,
+        finished_product_id: fp.id,
+        finished_product_name: fp.name_gu + ' (' + fp.name_en + ')',
+        total_weight_deducted: totalWeightKg,
+        loose_stock_before: looseBefore,
+        loose_stock_after: looseAfter,
+        items: createdItems
+      };
+    })();
+  },
+
+  getPackagingRuns(businessId, options = {}) {
+    const db = getDatabase();
+    let query = `
+      SELECT pr.*, fp.name_en as product_name_en, fp.name_gu as product_name_gu, u.full_name as packed_by_name
+      FROM packaging_runs pr
+      JOIN finished_products fp ON fp.id = pr.finished_product_id
+      LEFT JOIN users u ON u.id = pr.packed_by
+      WHERE pr.business_id = ?
+    `;
+    const params = [businessId];
+
+    if (options.finished_product_id) {
+      query += ` AND pr.finished_product_id = ?`;
+      params.push(options.finished_product_id);
+    }
+
+    query += ` ORDER BY pr.created_at DESC, pr.rowid DESC LIMIT ?`;
+    params.push(options.limit || 50);
+
+    const rows = db.prepare(query).all(...params);
+
+    const getItemsStmt = db.prepare(`
+      SELECT pri.*, pkg.package_weight_label, pkg.barcode, pkg.selling_price
+      FROM packaging_run_items pri
+      JOIN packaged_products pkg ON pkg.id = pri.packaged_product_id
+      WHERE pri.packaging_run_id = ?
+      ORDER BY pri.package_weight_grams ASC
+    `);
+
+    return rows.map(r => ({
+      ...r,
+      items: getItemsStmt.all(r.id)
+    }));
   }
 };
 

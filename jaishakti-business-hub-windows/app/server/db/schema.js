@@ -333,5 +333,68 @@ CREATE TABLE IF NOT EXISTS worker_diary_scans (
 );
 
 CREATE INDEX IF NOT EXISTS idx_diary_scans_worker ON worker_diary_scans(business_id, worker_id, created_at DESC);
+
+-- Tier 2 & Tier 3: Finished Products (Loose Farsan & Retail Packaged Goods)
+CREATE TABLE IF NOT EXISTS finished_products (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  recipe_id TEXT REFERENCES recipes(id),
+  name_en TEXT NOT NULL,
+  name_gu TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'namkeen',
+  current_loose_stock REAL NOT NULL DEFAULT 0,
+  min_loose_stock_alert REAL NOT NULL DEFAULT 10,
+  unit TEXT NOT NULL DEFAULT 'kg',
+  shelf_life_days INTEGER DEFAULT 30,
+  notes TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS packaged_products (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  finished_product_id TEXT NOT NULL REFERENCES finished_products(id) ON DELETE CASCADE,
+  package_weight_grams REAL NOT NULL,
+  package_weight_label TEXT NOT NULL,
+  barcode TEXT,
+  sku TEXT,
+  current_packet_stock INTEGER NOT NULL DEFAULT 0,
+  min_packet_stock_alert INTEGER NOT NULL DEFAULT 10,
+  selling_price REAL DEFAULT 0,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS packaging_runs (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  run_number TEXT NOT NULL,
+  finished_product_id TEXT NOT NULL REFERENCES finished_products(id),
+  total_weight_deducted REAL NOT NULL,
+  loose_stock_before REAL NOT NULL,
+  loose_stock_after REAL NOT NULL,
+  run_date TEXT NOT NULL,
+  notes TEXT,
+  packed_by TEXT REFERENCES users(id),
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS packaging_run_items (
+  id TEXT PRIMARY KEY,
+  packaging_run_id TEXT NOT NULL REFERENCES packaging_runs(id) ON DELETE CASCADE,
+  packaged_product_id TEXT NOT NULL REFERENCES packaged_products(id),
+  package_weight_grams REAL NOT NULL,
+  packet_count INTEGER NOT NULL,
+  subtotal_weight_kg REAL NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fin_prod_biz ON finished_products(business_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_pkg_prod_biz ON packaged_products(business_id, finished_product_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_pkg_runs_biz ON packaging_runs(business_id, run_date DESC);
+CREATE INDEX IF NOT EXISTS idx_pkg_run_items ON packaging_run_items(packaging_run_id);
 `;
 
